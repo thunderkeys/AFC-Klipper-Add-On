@@ -85,6 +85,49 @@ def add_filament_switch( switch_name, switch_pin, printer, show_sensor=True, run
     return fila
 
 
+def validate_led_colors(obj, config: 'ConfigWrapper', led_attrs: tuple) -> None:
+    """
+    Validates LED color attributes on an object at config load time.
+
+    Each attribute listed in ``led_attrs`` is read from *obj*. Non-None string
+    values are checked for valid comma-separated float tuples (R,G,B or R,G,B,W)
+    with each component in the 0-1 range.  A ``config.error`` is raised on the
+    first invalid value so Klipper reports the problem at startup rather than
+    crashing mid-print.
+
+    :param obj: Object whose attributes contain LED color strings
+    :param config: Klipper ConfigWrapper (used for section name and error raising)
+    :param led_attrs: Tuple of attribute names to validate on *obj*
+    """
+    section = config.get_name()
+    for attr in led_attrs:
+        value = getattr(obj, attr, None)
+        if value is None:
+            continue
+        parts = value.split(',')
+        if len(parts) not in (3, 4):
+            raise config.error(
+                "Invalid led color '{}' for option '{}' in section '{}': "
+                "expected 3 or 4 comma-separated values (R,G,B or R,G,B,W), got {}"
+                .format(value, attr, section, len(parts))
+            )
+        for part in parts:
+            try:
+                v = float(part)
+            except ValueError:
+                raise config.error(
+                    "Invalid led color '{}' for option '{}' in section '{}': "
+                    "'{}' is not a valid float"
+                    .format(value, attr, section, part.strip())
+                )
+            if v < 0 or v > 1:
+                raise config.error(
+                    "Invalid led color '{}' for option '{}' in section '{}': "
+                    "value {} is out of range (must be 0-1)"
+                    .format(value, attr, section, v)
+                )
+
+
 def check_and_return( value_str:str, data_values:dict ) -> str:
     """
     Common function to check if value exists in dictionary and returns value if it does.

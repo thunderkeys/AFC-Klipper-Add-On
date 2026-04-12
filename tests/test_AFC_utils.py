@@ -2,6 +2,7 @@
 Unit tests for extras/AFC_utils.py
 
 Covers:
+  - validate_led_colors()
   - check_and_return()
   - section_in_config()
   - DebounceButton
@@ -17,7 +18,107 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 # conftest installs Klipper mocks; extras is on sys.path via REPO_ROOT
-from extras.AFC_utils import check_and_return, section_in_config, DebounceButton, AFC_moonraker
+from extras.AFC_utils import check_and_return, section_in_config, validate_led_colors, DebounceButton, AFC_moonraker
+
+
+# ── validate_led_colors ──────────────────────────────────────────────────────
+
+class TestValidateLedColors:
+    """validate_led_colors raises config.error on invalid LED color strings."""
+
+    def _make_obj_and_config(self, **led_attrs):
+        """Build a simple object with LED attributes and a MockConfig."""
+        from tests.conftest import MockConfig
+        obj = type("Obj", (), led_attrs)()
+        cfg = MockConfig(name="test_section")
+        return obj, cfg
+
+    def test_valid_rgb_tuple(self):
+        obj, cfg = self._make_obj_and_config(led_fault="1,0,0")
+        validate_led_colors(obj, cfg, ("led_fault",))
+
+    def test_valid_rgbw_tuple(self):
+        obj, cfg = self._make_obj_and_config(led_fault="1,0,0.5,0")
+        validate_led_colors(obj, cfg, ("led_fault",))
+
+    def test_valid_all_zeros(self):
+        obj, cfg = self._make_obj_and_config(led_ready="0,0,0,0")
+        validate_led_colors(obj, cfg, ("led_ready",))
+
+    def test_valid_all_ones(self):
+        obj, cfg = self._make_obj_and_config(led_ready="1,1,1,1")
+        validate_led_colors(obj, cfg, ("led_ready",))
+
+    def test_none_value_is_skipped(self):
+        obj, cfg = self._make_obj_and_config(led_fault=None)
+        validate_led_colors(obj, cfg, ("led_fault",))
+
+    def test_missing_attr_is_skipped(self):
+        obj, cfg = self._make_obj_and_config()
+        validate_led_colors(obj, cfg, ("led_fault",))
+
+    def test_multiple_valid_attrs(self):
+        obj, cfg = self._make_obj_and_config(
+            led_fault="1,0,0,0", led_ready="0,0.8,0,0", led_loading="1,1,1,0"
+        )
+        validate_led_colors(obj, cfg, ("led_fault", "led_ready", "led_loading"))
+
+    def test_period_instead_of_comma_wrong_count_raises(self):
+        """Typo from issue #700: period instead of comma gives wrong part count."""
+        from configfile import error as KlipperError
+        obj, cfg = self._make_obj_and_config(led_tool_loaded="0.1.0,0")
+        with pytest.raises(KlipperError, match="expected 3 or 4"):
+            validate_led_colors(obj, cfg, ("led_tool_loaded",))
+
+    def test_period_instead_of_comma_bad_float_raises(self):
+        """Typo from issue #700: period instead of comma within a valid-count tuple."""
+        from configfile import error as KlipperError
+        obj, cfg = self._make_obj_and_config(led_tool_loaded="0.1.0,0,0,0")
+        with pytest.raises(KlipperError, match="not a valid float"):
+            validate_led_colors(obj, cfg, ("led_tool_loaded",))
+
+    def test_too_few_values_raises(self):
+        from configfile import error as KlipperError
+        obj, cfg = self._make_obj_and_config(led_fault="1,0")
+        with pytest.raises(KlipperError, match="expected 3 or 4"):
+            validate_led_colors(obj, cfg, ("led_fault",))
+
+    def test_too_many_values_raises(self):
+        from configfile import error as KlipperError
+        obj, cfg = self._make_obj_and_config(led_fault="1,0,0,0,0")
+        with pytest.raises(KlipperError, match="expected 3 or 4"):
+            validate_led_colors(obj, cfg, ("led_fault",))
+
+    def test_non_numeric_value_raises(self):
+        from configfile import error as KlipperError
+        obj, cfg = self._make_obj_and_config(led_fault="red,0,0,0")
+        with pytest.raises(KlipperError, match="not a valid float"):
+            validate_led_colors(obj, cfg, ("led_fault",))
+
+    def test_value_above_one_raises(self):
+        from configfile import error as KlipperError
+        obj, cfg = self._make_obj_and_config(led_fault="1.5,0,0,0")
+        with pytest.raises(KlipperError, match="out of range"):
+            validate_led_colors(obj, cfg, ("led_fault",))
+
+    def test_negative_value_raises(self):
+        from configfile import error as KlipperError
+        obj, cfg = self._make_obj_and_config(led_fault="-0.1,0,0,0")
+        with pytest.raises(KlipperError, match="out of range"):
+            validate_led_colors(obj, cfg, ("led_fault",))
+
+    def test_error_message_includes_section_name(self):
+        from configfile import error as KlipperError
+        obj, cfg = self._make_obj_and_config(led_fault="bad,0,0,0")
+        with pytest.raises(KlipperError, match="test_section"):
+            validate_led_colors(obj, cfg, ("led_fault",))
+
+    def test_first_invalid_attr_raises_others_not_checked(self):
+        """Validation stops at the first bad attribute."""
+        from configfile import error as KlipperError
+        obj, cfg = self._make_obj_and_config(led_fault="bad", led_ready="also_bad")
+        with pytest.raises(KlipperError, match="led_fault"):
+            validate_led_colors(obj, cfg, ("led_fault", "led_ready"))
 
 
 # ── check_and_return ──────────────────────────────────────────────────────────

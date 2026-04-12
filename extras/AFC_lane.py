@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from pins import PrinterPins
     from query_endstops import QueryEndstops
 
-try: from extras.AFC_utils import ERROR_STR, add_filament_switch
+try: from extras.AFC_utils import ERROR_STR, add_filament_switch, validate_led_colors
 except: raise error("Error when trying to import AFC_utils.ERROR_STR, add_filament_switch\n{trace}".format(trace=traceback.format_exc()))
 
 try: from extras import AFC_assist
@@ -168,6 +168,13 @@ class AFCLane:
         self.led_spool_index      = config.get('led_spool_index', None)                 # LED index to illuminate under spool
         self.led_spool_illum      = config.get('led_spool_illuminate', None)            # LED color to illuminate under spool
         self.led_use_filament_color: bool = config.getboolean('led_use_filament_color', None)  # When True, uses filament color from color field for lane LEDs instead of configured LED colors
+
+        # Validate LED color tuples (only non-None values set at lane level)
+        validate_led_colors(self, config, (
+            'led_fault', 'led_ready', 'led_not_ready', 'led_loading',
+            'led_prep_loaded', 'led_unloading', 'led_tool_loaded',
+            'led_tool_loaded_idle', 'led_tool_unloaded', 'led_spool_illum',
+        ))
 
         self.long_moves_speed: float   = config.getfloat("long_moves_speed", None)             # Speed in mm/s to move filament when doing long moves. Setting value here overrides values set in unit(AFC_BoxTurtle/NightOwl/etc) section
         self.long_moves_accel: float   = config.getfloat("long_moves_accel", None)             # Acceleration in mm/s squared when doing long moves. Setting value here overrides values set in unit(AFC_BoxTurtle/NightOwl/etc) section

@@ -36,7 +36,7 @@ except: raise error(ERROR_STR.format(import_lib="AFC_logger", trace=traceback.fo
 try: from extras.AFC_functions import afcDeltaTime
 except: raise error(ERROR_STR.format(import_lib="AFC_functions", trace=traceback.format_exc()))
 
-try: from extras.AFC_utils import add_filament_switch, AFC_moonraker
+try: from extras.AFC_utils import add_filament_switch, AFC_moonraker, validate_led_colors
 except: raise error(ERROR_STR.format(import_lib="AFC_utils", trace=traceback.format_exc()))
 
 try: from extras.AFC_stats import AFCStats
@@ -175,6 +175,14 @@ class afc:
         self.led_trailing           = config.get('led_buffer_trailing','0,1,0,0')      # LED color to set when buffer is trailing
         self.led_buffer_disabled    = config.get('led_buffer_disable', '0,0,0,0.25')   # LED color to set when buffer is disabled
         self.led_spool_illum        = config.get('led_spool_illuminate', "1,1,1,1")    # LED color to illuminate under spool
+
+        # Validate LED color tuples
+        validate_led_colors(self, config, (
+            'led_fault', 'led_ready', 'led_not_ready', 'led_loading',
+            'led_prep_loaded', 'led_unloading', 'led_tool_loaded',
+            'led_tool_loaded_idle', 'led_tool_unloaded', 'led_advancing',
+            'led_trailing', 'led_buffer_disabled', 'led_spool_illum',
+        ))
 
         # TOOL Cutting Settings
         self.tool                   = ''

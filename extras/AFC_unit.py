@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from gcode import GCodeCommand
     from configfile import ConfigWrapper
 
-try: from extras.AFC_utils import ERROR_STR, section_in_config
+try: from extras.AFC_utils import ERROR_STR, section_in_config, validate_led_colors
 except:
     trace=traceback.format_exc()
     err_str = f"Error when trying to import AFC_utils.ERROR_STR\n{trace}"
@@ -90,6 +90,13 @@ class afcUnit:
         self.led_logo_loading            = self.afc.function.HexConvert(config.get('led_logo_loading', self.led_loading ))
 
         self.led_use_filament_color:bool  = config.getboolean('led_use_filament_color', self.afc.led_use_filament_color)  # When True, uses filament color from color field for lane LEDs instead of configured LED colors
+
+        # Validate LED color tuples
+        validate_led_colors(self, config, (
+            'led_fault', 'led_ready', 'led_not_ready', 'led_loading',
+            'led_prep_loaded', 'led_unloading', 'led_tool_loaded',
+            'led_tool_loaded_idle', 'led_tool_unloaded', 'led_spool_illum',
+        ))
 
         self.long_moves_speed            = config.getfloat("long_moves_speed", self.afc.long_moves_speed)   # Speed in mm/s to move filament when doing long moves. Setting value here overrides values set in AFC.cfg file
         self.long_moves_accel            = config.getfloat("long_moves_accel", self.afc.long_moves_accel)   # Acceleration in mm/s squared when doing long moves. Setting value here overrides values set in AFC.cfg file
