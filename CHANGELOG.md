@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [09-09-2026]
+### Fixed
+- `M104`/`M109` with a `T` parameter no longer refuse to set the temperature when the printer is
+  not printing. The ooze-prevention check exists for slicer-issued commands during a print, but it
+  also swallowed commands typed at the console or sent by a UI (KlipperScreen sends
+  `M104 T<n> S<temp>` for every extruder temperature change), leaving the hotend at its old target
+  while the UI showed the new one. The check now only applies while a print is running.
+
 ## [09-04-2026]
 ### Fixed
 - Fixed an issue where the `AFC_TEST_LANES` macro would potentially call the wrong PARK macro if a custom macro was

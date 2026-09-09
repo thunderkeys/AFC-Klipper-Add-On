@@ -19,6 +19,8 @@ Covers:
   - afc.CHANGE_TOOL: exception handling (bare except, error.AFC_error, finally guarantees)
   - afc.TOOL_LOAD: unload when destination extruder already has a different lane loaded
   - afc.cmd_CHANGE_TOOL: NEW_EXTRUDER_TEMP parameter parsing
+  - afc.cmd_AFC_M109: ooze-prevention guard, snapmaker/unmapped/no-T paths, deadband wait
+  - afc.cmd_AFC_M104: delegation to cmd_AFC_M109 without waiting
 """
 
 from __future__ import annotations
@@ -4822,3 +4824,326 @@ class TestJoinThreads:
         obj._var_write_thread.join.side_effect = lambda *a, **kw: order.append("join")
         obj.join_threads()
         assert order == ["put_nowait", "join"]
+
+
+# ── cmd_AFC_M109 ──────────────────────────────────────────────────────────────
+
+def _make_afc_for_m109(is_printing=True, disable_ooze_check=False, lane_loaded="lane1",
+                       curr_extruder=True, loaded_lane_map="T1"):
+    """Build an afc instance wired up for cmd_AFC_M109 ooze-check tests.
+
+    Two lanes share one extruder: the loaded lane (map set by `loaded_lane_map`)
+    and lane2, which is mapped to T0 and is the lane M104/M109 T0 asks for.
+    """
+    obj = _make_afc()
+    obj.snapmaker_printer = False
+    obj.disable_ooze_check = disable_ooze_check
+    obj.temp_wait_tolerance = 5
+    obj._wait_for_temp_within_tolerance = MagicMock()
+    obj.function.is_printing.return_value = is_printing
+
+    heater = MagicMock()
+    heater.get_temp.return_value = (25.0, 0.0)
+    extruder_obj = MagicMock()
+    extruder_obj.get_heater.return_value = heater
+
+    lane1 = MagicMock()
+    lane1.name = "lane1"
+    lane1.map = [loaded_lane_map]
+    lane1.extruder_obj = extruder_obj
+    lane2 = MagicMock()
+    lane2.name = "lane2"
+    lane2.map = ["T0"]
+    lane2.extruder_obj = extruder_obj
+    obj.lanes = {"lane1": lane1, "lane2": lane2}
+
+    extruder = MagicMock()
+    extruder.name = "extruder"
+    extruder.lanes = ["lane1", "lane2"]
+    extruder.lane_loaded = lane_loaded
+    obj.function.get_current_extruder_obj.return_value = extruder if curr_extruder else None
+    # T0 is lane2 unless the loaded lane itself is mapped to T0
+    obj.function.get_lane_by_map.return_value = lane1 if loaded_lane_map == "T0" else lane2
+
+    pheaters = MagicMock()
+    obj.printer._objects["heaters"] = pheaters
+
+    return obj, pheaters, heater, extruder_obj
+
+
+def _make_gcmd_m109(toolnum=0, temp=0.0, deadband=None, snapmaker_a=None):
+    gcmd = MagicMock()
+    gcmd.get_commandline.return_value = f"M104 T{toolnum} S{temp}"
+    gcmd.get_int.side_effect = (
+        lambda key, default=None, **kwargs: {"T": toolnum, "A": snapmaker_a}.get(key, default)
+    )
+    gcmd.get_float.side_effect = (
+        lambda key, default=None, **kwargs: {"S": temp, "D": deadband}.get(key, default)
+    )
+    return gcmd
+
+
+class TestCmdAfcM109:
+    """Tests for afc.cmd_AFC_M109().
+
+    Focused on the ooze-prevention guard, which drops the temperature change
+    when another lane on the current extruder is loaded. All four of its
+    conditions are exercised on their own: disable_ooze_check, a current
+    extruder, that extruder having a lane loaded, and the printer actually
+    printing. The command's other paths (snapmaker, unmapped tool, no T
+    parameter, deadband wait) are covered after those.
+    """
+
+    @staticmethod
+    def _blocked_warning(extruder_name="extruder", map_name="T0"):
+        return ("<span class=warning--text>WARNING: "
+                f"Not setting temperature for {map_name} since another lane is loaded for "
+                f"{extruder_name}</span>")
+
+    @staticmethod
+    def _set_messages(extruder_obj, temp):
+        return [
+            ("debug", f"AFC_M104/M109 raw cmd: M104 T0 S{temp}"),
+            ("debug", f"Setting temperature for {extruder_obj} to {temp}"),
+            ("debug", "Done setting temp"),
+        ]
+
+    def test_blocks_temp_change_while_printing(self):
+        """Slicer ooze prevention mid-print is dropped with a warning."""
+        obj, pheaters, _heater, _extruder_obj = _make_afc_for_m109(is_printing=True)
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(), wait=False)
+
+        pheaters.set_temperature.assert_not_called()
+        assert obj.logger.messages == [
+            ("debug", "AFC_M104/M109 raw cmd: M104 T0 S0.0"),
+            ("raw", self._blocked_warning()),
+        ]
+
+    def test_sets_temp_when_not_printing(self):
+        """A console/UI command while idle always sets the temperature."""
+        obj, pheaters, heater, extruder_obj = _make_afc_for_m109(is_printing=False)
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(), wait=False)
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(heater, 0.0, False),
+            call(heater, 0.0, False),
+        ]
+        assert obj.logger.messages == self._set_messages(extruder_obj, 0.0)
+
+    def test_sets_temp_when_ooze_check_disabled(self):
+        """disable_ooze_check alone bypasses the guard while printing."""
+        obj, pheaters, heater, extruder_obj = _make_afc_for_m109(
+            is_printing=True, disable_ooze_check=True
+        )
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(temp=220.0), wait=False)
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(heater, 220.0, False),
+            call(heater, 220.0, False),
+        ]
+        assert obj.logger.messages == self._set_messages(extruder_obj, 220.0)
+
+    def test_sets_temp_when_no_current_extruder(self):
+        """No current extruder object alone bypasses the guard while printing."""
+        obj, pheaters, heater, extruder_obj = _make_afc_for_m109(
+            is_printing=True, curr_extruder=False
+        )
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(temp=210.0), wait=False)
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(heater, 210.0, False),
+            call(heater, 210.0, False),
+        ]
+        assert obj.logger.messages == self._set_messages(extruder_obj, 210.0)
+
+    def test_sets_temp_when_no_lane_loaded(self):
+        """An extruder with nothing loaded alone bypasses the guard while printing."""
+        obj, pheaters, heater, extruder_obj = _make_afc_for_m109(
+            is_printing=True, lane_loaded=None
+        )
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(temp=230.0), wait=False)
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(heater, 230.0, False),
+            call(heater, 230.0, False),
+        ]
+        assert obj.logger.messages == self._set_messages(extruder_obj, 230.0)
+
+    def test_sets_temp_for_loaded_lane_while_printing(self):
+        """The loaded lane's own tool map is still allowed to set temperature."""
+        obj, pheaters, heater, extruder_obj = _make_afc_for_m109(
+            is_printing=True, loaded_lane_map="T0"
+        )
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(temp=240.0), wait=False)
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(heater, 240.0, False),
+            call(heater, 240.0, False),
+        ]
+        assert obj.logger.messages == self._set_messages(extruder_obj, 240.0)
+
+    def test_skips_extruder_lane_missing_from_lanes(self):
+        """A lane name the extruder claims but AFC doesn't know is skipped over."""
+        obj, pheaters, _heater, _extruder_obj = _make_afc_for_m109(is_printing=True)
+        obj.function.get_current_extruder_obj.return_value.lanes = ["ghost", "lane2"]
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(), wait=False)
+
+        pheaters.set_temperature.assert_not_called()
+        assert obj.logger.messages == [
+            ("debug", "AFC_M104/M109 raw cmd: M104 T0 S0.0"),
+            ("raw", self._blocked_warning()),
+        ]
+
+    def test_sets_temp_when_no_extruder_lane_matches_map(self):
+        """No lane on the current extruder maps to the requested tool: temp is set."""
+        obj, pheaters, heater, extruder_obj = _make_afc_for_m109(is_printing=True)
+        obj.function.get_current_extruder_obj.return_value.lanes = ["lane1"]
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(temp=250.0), wait=False)
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(heater, 250.0, False),
+            call(heater, 250.0, False),
+        ]
+        assert obj.logger.messages == self._set_messages(extruder_obj, 250.0)
+
+    # ── paths outside the ooze check ──────────────────────────────────────────
+
+    def test_snapmaker_a_param_uses_toolhead_extruder(self):
+        """On a snapmaker printer, A<n> resolves the extruder by tool number."""
+        obj, pheaters, _heater, _extruder_obj = _make_afc_for_m109(is_printing=True)
+        obj.snapmaker_printer = True
+        snap_heater = MagicMock()
+        snap_heater.get_temp.return_value = (25.0, 0.0)
+        snap_extruder = MagicMock()
+        snap_extruder.get_heater.return_value = snap_heater
+        obj.tools = {"extruder": snap_extruder}
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(temp=220.0, snapmaker_a=0), wait=False)
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(snap_heater, 220.0, False),
+            call(snap_heater, 220.0, False),
+        ]
+        assert obj.logger.messages == [
+            ("debug", "AFC_M104/M109 raw cmd: M104 T0 S220.0"),
+            ("debug", "Snapmaker Temp extruder name extruder"),
+            ("debug", "Done setting temp"),
+        ]
+
+    def test_snapmaker_a_param_names_extruder_by_tool_number(self):
+        """Tool numbers above zero map to extruder<n> on a snapmaker printer."""
+        obj, pheaters, _heater, _extruder_obj = _make_afc_for_m109(is_printing=True)
+        obj.snapmaker_printer = True
+        snap_heater = MagicMock()
+        snap_heater.get_temp.return_value = (25.0, 0.0)
+        snap_extruder = MagicMock()
+        snap_extruder.get_heater.return_value = snap_heater
+        obj.tools = {"extruder1": snap_extruder}
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(toolnum=1, temp=220.0, snapmaker_a=0), wait=False)
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(snap_heater, 220.0, False),
+            call(snap_heater, 220.0, False),
+        ]
+        assert obj.logger.messages == [
+            ("debug", "AFC_M104/M109 raw cmd: M104 T1 S220.0"),
+            ("debug", "Snapmaker Temp extruder name extruder1"),
+            ("debug", "Done setting temp"),
+        ]
+
+    def test_unmapped_tool_number_errors(self):
+        """A T parameter with no lane mapped to it sets no temperature."""
+        obj, pheaters, _heater, _extruder_obj = _make_afc_for_m109(is_printing=False)
+        obj.function.get_lane_by_map.return_value = None
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(temp=220.0), wait=False)
+
+        pheaters.set_temperature.assert_not_called()
+        assert obj.logger.messages == [
+            ("debug", "AFC_M104/M109 raw cmd: M104 T0 S220.0"),
+            ("error", "extruder not configured for T0"),
+        ]
+
+    def test_lane_without_extruder_object_errors(self):
+        """A mapped lane with no extruder object sets no temperature."""
+        obj, pheaters, _heater, _extruder_obj = _make_afc_for_m109(is_printing=False)
+        obj.lanes["lane2"].extruder_obj = None
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(temp=220.0), wait=False)
+
+        pheaters.set_temperature.assert_not_called()
+        assert obj.logger.messages == [
+            ("debug", "AFC_M104/M109 raw cmd: M104 T0 S220.0"),
+            ("debug", "Setting temperature for None to 220.0"),
+            ("error", "extruder not configured for T0"),
+        ]
+
+    def test_no_tool_number_uses_current_toolhead_extruder(self):
+        """Without a T parameter the toolhead's own extruder is used."""
+        obj, pheaters, _heater, _extruder_obj = _make_afc_for_m109(is_printing=True)
+        th_heater = MagicMock()
+        th_heater.get_temp.return_value = (25.0, 0.0)
+        th_extruder = MagicMock()
+        th_extruder.get_heater.return_value = th_heater
+        obj.toolhead.get_extruder.return_value = th_extruder
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(toolnum=None, temp=220.0), wait=False)
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(th_heater, 220.0, False),
+            call(th_heater, 220.0, False),
+        ]
+        assert obj.logger.messages == [
+            ("debug", "AFC_M104/M109 raw cmd: M104 TNone S220.0"),
+            ("debug", "Done setting temp"),
+        ]
+
+    def test_deadband_waits_within_tolerance(self):
+        """M109 with D<n> hands off to the deadband wait and returns."""
+        obj, pheaters, heater, _extruder_obj = _make_afc_for_m109(is_printing=False)
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(temp=220.0, deadband=5.0), wait=True)
+
+        assert pheaters.set_temperature.call_args_list == [call(heater, 220.0, False)]
+        obj._wait_for_temp_within_tolerance.assert_called_once_with(heater, 220.0, 5.0)
+        assert obj.logger.messages == [
+            ("debug", "AFC_M104/M109 raw cmd: M104 T0 S220.0"),
+            ("debug", f"Setting temperature for {obj.lanes['lane2'].extruder_obj} to 220.0"),
+        ]
+
+    def test_waits_when_temp_outside_tolerance(self):
+        """M109 without a deadband waits when the hotend is far from target."""
+        obj, pheaters, heater, extruder_obj = _make_afc_for_m109(is_printing=False)
+
+        obj.cmd_AFC_M109(_make_gcmd_m109(temp=220.0), wait=True)
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(heater, 220.0, False),
+            call(heater, 220.0, True),
+        ]
+        obj._wait_for_temp_within_tolerance.assert_not_called()
+        assert obj.logger.messages == self._set_messages(extruder_obj, 220.0)
+
+
+class TestCmdAfcM104:
+    """Tests for afc.cmd_AFC_M104(), which is cmd_AFC_M109() without the wait."""
+
+    def test_delegates_to_m109_without_waiting(self):
+        obj, pheaters, heater, extruder_obj = _make_afc_for_m109(is_printing=False)
+
+        obj.cmd_AFC_M104(_make_gcmd_m109(temp=220.0))
+
+        assert pheaters.set_temperature.call_args_list == [
+            call(heater, 220.0, False),
+            call(heater, 220.0, False),
+        ]
+        assert obj.logger.messages == TestCmdAfcM109._set_messages(extruder_obj, 220.0)
