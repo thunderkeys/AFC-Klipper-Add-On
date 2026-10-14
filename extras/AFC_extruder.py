@@ -272,6 +272,8 @@ class AFCExtruder:
         self.tc_unit_obj: Optional[AfcToolchanger|None] = None
         self.tc_lane: Optional[AFCLane|None]            = None
         self.tool: Optional[str]        = config.get('tool', None)
+        # Physical tool number, required for shared extruder toolchangers (INDX)
+        self.tool_index: Optional[int]  = config.getint('tool_index', None, minval=0)
         self.tool_obj                   = None
         self.map: list                  = config.getlist('map', [])
         self.no_lanes                   = False
@@ -388,6 +390,53 @@ class AFCExtruder:
     def __str__(self):
         return self.name
 
+    @property
+    def shared_extruder(self) -> bool:
+        """
+        True when this tool shares its klipper extruder with other tools (INDX).
+
+        :return bool: True if attached toolchanger backend uses a shared extruder
+        """
+        return bool(self.tc_unit_obj is not None
+                    and self.tc_unit_obj.backend.shared_extruder)
+
+    @property
+    def tool_key(self) -> str:
+        """
+        Key used for this tool in afc.tools. Shared extruder tools are keyed by AFC_extruder
+        name since they all map to the same klipper extruder, everything else by klipper
+        extruder name.
+
+        :return str: Key for this tool
+        """
+        return self.name if self.shared_extruder else self.th_extruder_name
+
+    def _register_tool(self) -> None:
+        """
+        Adds this tool to afc.tools. Raises a config error if the key is already taken, or if
+        shared extruder tools and regular tools map to the same klipper extruder.
+        """
+        key = self.tool_key
+        existing = self.afc.tools.get(key)
+        if (existing is not None
+            and existing is not self):
+            error_str = (f"Duplicate toolhead extruder mapping '{self.th_extruder_name}' "
+                         f"between [{existing.fullname}] and [{self.fullname}]. "
+                         "Each AFC_extruder section must map to a unique toolhead extruder.")
+            raise error(error_str)
+
+        for other in self.afc.tools.values():
+            if (other is not self
+                and other.th_extruder_name == self.th_extruder_name
+                and (other.tc_unit_obj is not self.tc_unit_obj
+                     or not self.shared_extruder)):
+                error_str = (f"[{other.fullname}] and [{self.fullname}] both map to "
+                             f"'{self.th_extruder_name}'. Only tools in the same shared extruder "
+                             "toolchanger unit (backend: indx) can share a toolhead extruder.")
+                raise error(error_str)
+
+        self.afc.tools[key] = self
+
     def _check_extruder_name(self):
         """
         Helper method the verify that "extruder" exists in either the config name or in
@@ -448,14 +497,17 @@ class AFCExtruder:
         and assigns it to the instance variable `self.AFC`.
         """
         self.reactor = self.afc.reactor
-        existing = self.afc.tools.get(self.th_extruder_name)
-        if (existing is not None
-            and existing is not self):
-            error_str = (f"Duplicate toolhead extruder mapping '{self.th_extruder_name}' "
-                         f"between [{existing.fullname}] and [{self.fullname}]. "
-                         "Each AFC_extruder section must map to a unique toolhead extruder.")
-            raise error(error_str)
-        self.afc.tools[self.th_extruder_name] = self
+
+        # Toolchanger unit is looked up first since its backend decides how this tool is keyed
+        if self.tc_unit_name:
+            tc_str = f"AFC_Toolchanger {self.tc_unit_name}"
+            self.tc_unit_obj = self.printer.lookup_object(tc_str, None)
+            if not self.tc_unit_obj:
+                error_str = self.common_error.format(tc_str, self.fullname)
+                raise error(error_str)
+            self.tc_lane.unit_obj = self.tc_unit_obj
+
+        self._register_tool()
 
         self.toolhead_extruder = self.printer.lookup_object(self.th_extruder_name, None)
         if not self.toolhead_extruder:
@@ -474,14 +526,6 @@ class AFCExtruder:
             if not self.park_detector_obj:
                 error_str = self.common_error.format(park_dect_str, self.fullname)
                 raise error(error_str)
-
-        if self.tc_unit_name:
-            tc_str = f"AFC_Toolchanger {self.tc_unit_name}"
-            self.tc_unit_obj = self.printer.lookup_object(tc_str, None)
-            if not self.tc_unit_obj:
-                error_str = self.common_error.format(tc_str, self.fullname)
-                raise error(error_str)
-            self.tc_lane.unit_obj = self.tc_unit_obj
 
         try:
             # Looking up led object if user supplied variable

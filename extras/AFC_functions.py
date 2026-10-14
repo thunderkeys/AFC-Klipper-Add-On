@@ -510,16 +510,41 @@ class afcFunction:
 
     def get_current_extruder(self) -> Optional[str]:
         """
-        Helper function to lookup current extruder name loaded into active toolhead
+        Helper function to lookup the afc.tools key of the tool on the active toolhead. This is
+        the klipper extruder name, except for shared extruder toolchangers (INDX) where it is
+        the AFC_extruder name of the tool on the head.
 
-        :return string: Name of current extruder/tool, None if no extruder/tool
+        :return string: Key of current extruder/tool, None if no extruder/tool
         """
         current_extruder: str = self.afc.toolhead.get_extruder().name
         tool_obj: Optional[AFCExtruder] = self.afc.tools.get(current_extruder, None)
         if tool_obj:
             return current_extruder if tool_obj.on_shuttle() else None
-        else:
-            return None
+
+        # Shared extruder tools are keyed by AFC_extruder name, ask the backend instead
+        for tool in self.afc.tools.values():
+            if (tool.th_extruder_name == current_extruder
+                and tool.shared_extruder
+                and tool.tc_unit_obj is not None):
+                active = tool.tc_unit_obj.backend.active_tool()
+                return active.tool_key if active is not None else None
+        return None
+
+    def get_tool(self, name: str) -> Optional[AFCExtruder]:
+        """
+        Looks up a tool by afc.tools key, AFC_extruder name or klipper extruder name. A klipper
+        extruder name shared by several tools does not resolve.
+
+        :param name: Name to look up
+        :return AFCExtruder|None: Matching tool, None if not found
+        """
+        tool = self.afc.tools.get(name)
+        if tool is not None:
+            return tool
+        for tool in self.afc.tools.values():
+            if tool.name == name:
+                return tool
+        return None
 
     def verify_led_object(self, led_name):
         """

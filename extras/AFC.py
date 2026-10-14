@@ -1665,7 +1665,7 @@ class afc:
         self.function.check_absolute_mode("TOOL_LOAD")
 
         # If the current extruder is not the one associated with the lane, switch to it.
-        if self.function.get_current_extruder() != cur_lane.extruder_obj.th_extruder_name:
+        if self.function.get_current_extruder() != cur_lane.extruder_obj.tool_key:
             cur_lane.tool_swap()
 
         # After a tool swap the newly active extruder may already have a different lane
@@ -2109,7 +2109,7 @@ class afc:
                                     pause=self.function.in_print())
                 return False
 
-            next_extruder   = next_lane.extruder_obj.th_extruder_name
+            next_extruder   = next_lane.extruder_obj.tool_key
             # TODO: need to check if its just a tool swap, or tool swap with a lane unload
 
             # If the next extruder is specified and it is not the current extruder, perform a tool swap.
@@ -2584,7 +2584,7 @@ class afc:
                 return
 
             self.next_lane_load = cur_lane.name
-            next_extruder = cur_lane.extruder_obj.th_extruder_name
+            next_extruder = cur_lane.extruder_obj.tool_key
             infinite_runout: bool = cur_lane.status == AFCLaneState.INFINITE_RUNOUT
             adjusting_temperature: bool = new_extruder_temp is not None or \
                 (infinite_runout and self.function.get_current_extruder() != next_extruder)
@@ -2610,7 +2610,7 @@ class afc:
                     # Now cool down the old extruder when not doing infinite runout
                     if (_last_lane is not None
                         and not infinite_runout
-                        and _last_lane.extruder_obj.th_extruder_name != next_extruder):
+                        and _last_lane.extruder_obj.tool_key != next_extruder):
                         self._cooldown_last_extruder(_last_lane.extruder_obj, infinite_runout)
 
             # If the requested lane is not the current lane, proceed with the tool change.
@@ -2656,7 +2656,7 @@ class afc:
                     # TOOL_UNLOAD should now be done
                     if (_last_lane is not None
                         and infinite_runout
-                        and _last_lane.extruder_obj.th_extruder_name != next_extruder):
+                        and _last_lane.extruder_obj.tool_key != next_extruder):
                         self._cooldown_last_extruder(_last_lane.extruder_obj, infinite_runout)
 
                     self.logger.info("Heating and waiting for {} for {}".format(next_extruder_obj.name,
@@ -3107,7 +3107,7 @@ class afc:
         ```
         """
         extruder: str = gcmd.get("EXTRUDER", "extruder")
-        extruder_obj = self.tools.get(extruder, None)
+        extruder_obj = self.function.get_tool(extruder)
         if extruder_obj:
             extruder_obj.estats.last_blade_changed.set_current_time()
             extruder_obj.estats.cut_total_since_changed.reset_count()
@@ -3167,7 +3167,7 @@ class afc:
                 self.afc_stats.average_tool_load_time.reset_count()
                 self.afc_stats.reset_average_times()
             else:
-                extruder_obj: AFCExtruder = self.tools.get(extruder, None)
+                extruder_obj: Optional[AFCExtruder] = self.function.get_tool(extruder)
                 if extruder_obj:
                     reset_extruder(extruder_obj)
                 else:

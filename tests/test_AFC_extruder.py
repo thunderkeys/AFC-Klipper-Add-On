@@ -230,6 +230,7 @@ def _make_afc_extruder(name="extruder"):
     ext.tool_obj     = None
     ext.tc_unit_name = None
     ext.tc_unit_obj  = None
+    ext.tool_index   = None
     ext.tool         = None
     ext.lane_loaded = None
     ext.lanes = {}
