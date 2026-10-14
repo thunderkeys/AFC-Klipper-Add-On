@@ -1,0 +1,44 @@
+# Bondtech INDX integration test
+#
+# Loads three INDX tools sharing one extruder plus the vendored INDX macros, then drives the
+# INDX state hook directly (no motion, tool changes need homing and real hardware) and checks
+# that AFC follows it: on_shuttle, the T(n) wrapper `active` flags, and INDX heating rules.
+
+DICTIONARY stm32h723.dict
+CONFIG afc_indx.cfg
+
+AFC_CLEAR_MESSAGE
+
+# Start from an empty head regardless of the persisted save_variables file
+_INDX_SET_ACTIVE_TOOL TOOL=-1
+ASSERT TEST="{not printer['AFC_extruder tool0'].on_shuttle}"
+ASSERT TEST="{not printer['gcode_macro T0'].active}"
+
+# INDX picks up T1 outside AFC (like the G28 T0 fetch or MANUAL_TOOL_SEAT)
+_INDX_SET_ACTIVE_TOOL TOOL=1
+ASSERT TEST="{printer['AFC_extruder tool1'].on_shuttle}"
+ASSERT TEST="{not printer['AFC_extruder tool0'].on_shuttle}"
+ASSERT TEST="{printer['gcode_macro T1'].active}"
+ASSERT TEST="{not printer['gcode_macro T0'].active}"
+ASSERT TEST="{printer['AFC_extruder tool2'].tool_index == 2}"
+
+# Heating: the tool on the head heats (T(n) params need PREP maps, see unit tests)
+M104 S200
+ASSERT TEST="{printer.extruder.target == 200}"
+M104 S0
+ASSERT TEST="{printer.extruder.target == 0}"
+
+# no_heat_tools: tool held at 0
+SET_GCODE_VARIABLE MACRO=TOOL_POSITIONS VARIABLE=no_heat_tools VALUE=[1]
+M104 S210
+ASSERT TEST="{printer.extruder.target == 0}"
+SET_GCODE_VARIABLE MACRO=TOOL_POSITIONS VARIABLE=no_heat_tools VALUE=[]
+
+# Empty head: nothing heats
+_INDX_SET_ACTIVE_TOOL TOOL=-1
+M104 S210
+ASSERT TEST="{printer.extruder.target == 0}"
+ASSERT TEST="{not printer['gcode_macro T1'].active}"
+
+# Latch hook is callable
+AFC_INDX_PRE_LATCH

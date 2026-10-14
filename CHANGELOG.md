@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10-14-2026]
+### Added
+- Bondtech INDX toolchanger support. `[AFC_Toolchanger]` takes a new `backend` option (`ktc` default,
+  or `indx`), and `[AFC_extruder]` takes `tool_index`. INDX tools share the Smart Head `extruder`
+  and are keyed by their AFC_extruder name. See `docs/INDX.md`.
+- The INDX Klipper macros are vendored in `templates/indx_macros` with AFC patches. The installer
+  offers a "Bondtech INDX" installation type, and updates refresh the INDX macros while keeping the
+  user's `indx.cfg`.
+- `utilities/indx_resync.py` merges upstream INDX macro changes into the vendored copy. See
+  `docs/INDX_macro_resync.md`.
+### Changed
+- `AFC_Toolchanger` select and unselect moved into a backend. KTC and custom swap/unselect behave
+  as before.
+
 ## [09-12-2026]
 ### Fixed
 - The `install-afc.sh` script will now properly enumerate additional unit installs.
