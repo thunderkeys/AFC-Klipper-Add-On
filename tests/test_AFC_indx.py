@@ -509,3 +509,41 @@ class TestLaneToolSwapPassesTemp:
         lane.extruder_obj.tc_unit_obj = None
         assert lane.tool_swap() is True
 
+
+class TestPreLatch:
+    def test_unsyncs_only_indx_lanes(self):
+        unit, backend, _, tools = _make_indx(active=0)
+        backend.handle_ready()
+        other = MagicMock()
+        other.extruder_obj = MagicMock()
+        unit.afc.lanes["other"] = other
+        unit.afc.gcode._commands["AFC_INDX_PRE_LATCH"](MockGCodeCommand())
+        for tool in tools:
+            tool.tc_lane.unsync_to_extruder.assert_called_once()
+        other.unsync_to_extruder.assert_not_called()
+
+
+class TestLaneSyncGating:
+    def _lane(self, shared, on_head):
+        from tests.test_AFC_lane import _make_afc_lane
+        lane = _make_afc_lane("AFC_stepper lane1")
+        lane.extruder_obj = MagicMock()
+        lane.extruder_obj.shared_extruder = shared
+        lane.extruder_obj.on_shuttle.return_value = on_head
+        lane.drive_stepper = MagicMock()
+        return lane
+
+    def test_shared_tool_off_head_not_synced(self):
+        lane = self._lane(True, False)
+        lane.sync_to_extruder()
+        lane.drive_stepper.sync_to_extruder.assert_not_called()
+
+    def test_shared_tool_on_head_synced(self):
+        lane = self._lane(True, True)
+        lane.sync_to_extruder()
+        lane.drive_stepper.sync_to_extruder.assert_called_once()
+
+    def test_regular_tool_always_synced(self):
+        lane = self._lane(False, False)
+        lane.sync_to_extruder()
+        lane.drive_stepper.sync_to_extruder.assert_called_once()

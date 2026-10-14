@@ -1467,6 +1467,10 @@ class AFCLane:
 
         :param update_current: Sets current to specified print current when True
         """
+        # Shared extruder tools (INDX) only drive filament while on the head
+        if (self.extruder_obj.shared_extruder
+            and not self.extruder_obj.on_shuttle()):
+            return
         if self.drive_stepper is not None:
             self.drive_stepper.sync_to_extruder(update_current,
                                                 th_extruder_name=self.extruder_obj.th_extruder_name)

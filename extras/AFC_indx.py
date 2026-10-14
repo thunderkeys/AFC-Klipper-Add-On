@@ -47,6 +47,8 @@ class IndxBackend(ToolchangerBackend):
 
         self.afc.gcode.register_command("AFC_INDX_TOOL_CHANGED", self.cmd_AFC_INDX_TOOL_CHANGED,
                                         desc=self.cmd_AFC_INDX_TOOL_CHANGED_help)
+        self.afc.gcode.register_command("AFC_INDX_PRE_LATCH", self.cmd_AFC_INDX_PRE_LATCH,
+                                        desc=self.cmd_AFC_INDX_PRE_LATCH_help)
 
     def tools(self) -> list[AFCExtruder]:
         """
@@ -285,3 +287,25 @@ class IndxBackend(ToolchangerBackend):
             return
         self.logger.debug(f"INDX reported T{tool} on head, syncing AFC")
         self.afc.function.handle_activate_extruder()
+
+    cmd_AFC_INDX_PRE_LATCH_help = "Internal: called by the INDX macros before a latch move"
+    def cmd_AFC_INDX_PRE_LATCH(self, gcmd: GCodeCommand) -> None:
+        """
+        Called by the vendored `_TC_LATCH_MOVE` macro before every latch move. Latch moves drive
+        the shared extruder, so every lane stepper on an INDX tool is unsynced first to keep it
+        from moving filament with the latch. Lanes are synced again once a tool change finishes.
+
+        Usage
+        -----
+        `AFC_INDX_PRE_LATCH`
+
+        Example
+        -----
+        ```
+        AFC_INDX_PRE_LATCH
+        ```
+        """
+        tools = self.tools()
+        for lane in self.afc.lanes.values():
+            if lane.extruder_obj in tools:
+                lane.unsync_to_extruder()
