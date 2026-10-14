@@ -61,6 +61,7 @@ source include/uninstall.sh
 source include/update_commands.sh
 source include/update_functions.sh
 source include/emu_templater.sh
+source include/indx_functions.sh
 
 source include/unit_functions.sh
 

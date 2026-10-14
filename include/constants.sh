@@ -36,6 +36,7 @@ backup_date=$(date +%Y%m%d%H%M%S)
 files_updated_or_installed="False"
 test_mode="False"
 installation_options=("${UNIT_TYPE_ORDER[@]}")
+mapfile -t additional_installation_options < <(unit_additional_types)
 invalid_name="False"
 minimum_python_major="3"
 minimum_python_minor="8"

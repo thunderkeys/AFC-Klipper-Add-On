@@ -31,6 +31,7 @@ source "${SCRIPT_DIR}/include/uninstall.sh"
 source "${SCRIPT_DIR}/include/update_commands.sh"
 source "${SCRIPT_DIR}/include/update_functions.sh"
 source "${SCRIPT_DIR}/include/emu_templater.sh"
+source "${SCRIPT_DIR}/include/indx_functions.sh"
 
 source "${SCRIPT_DIR}/include/unit_functions.sh"
 

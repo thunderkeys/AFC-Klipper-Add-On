@@ -260,6 +260,7 @@ try:
             "OpenAMS",
             "ViViD",
             "EMU",
+            "Bondtech INDX",
         ]
 
     def test_no_adapter_dispatchers_survive_under_set_e():

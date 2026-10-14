@@ -96,10 +96,10 @@ additional_system_menu() {
         previous_installation_type="$installation_type"
 
         # Increment the counter and reset if it exceeds the array length
-        counter=$(( (counter + 1) % ${#installation_options[@]} ))
+        counter=$(( (counter + 1) % ${#additional_installation_options[@]} ))
 
         # Set the installation type to the current option
-        installation_type="${installation_options[$counter]}"
+        installation_type="${additional_installation_options[$counter]}"
 
         additional_buffer_type="$(unit_additional_buffer_type_after_transition "$previous_installation_type" "$installation_type" "$additional_buffer_type")"
 

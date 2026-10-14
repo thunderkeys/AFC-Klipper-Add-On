@@ -60,6 +60,7 @@ UNIT_TYPE_ORDER=(
   "OpenAMS"
   "ViViD"
   "EMU"
+  "Bondtech INDX"
 )
 
 # installation_type (display name) -> identifier-safe key used for function
@@ -74,6 +75,7 @@ declare -A UNIT_KEY=(
   ["OpenAMS"]="OpenAMS"
   ["ViViD"]="ViViD"
   ["EMU"]="EMU"
+  ["Bondtech INDX"]="INDX"
 )
 
 # installation_type -> default unit name offered by name_additional_unit().
@@ -87,7 +89,26 @@ declare -A UNIT_ADDITIONAL_DEFAULT_NAME=(
   ["OpenAMS"]="AMS_1"
   ["ViViD"]="Vivid_1"
   ["EMU"]="EMU_1"
+  ["Bondtech INDX"]="INDX"
 )
+
+# Types that can only be the first install, never an "additional unit" (they
+# are not filament units, e.g. a toolchanger).
+UNIT_PRIMARY_ONLY=(
+  "Bondtech INDX"
+)
+
+unit_additional_types() {
+  # Prints UNIT_TYPE_ORDER minus UNIT_PRIMARY_ONLY, one type per line.
+  local t p skip
+  for t in "${UNIT_TYPE_ORDER[@]}"; do
+    skip="False"
+    for p in "${UNIT_PRIMARY_ONLY[@]}"; do
+      [ "$t" == "$p" ] && skip="True"
+    done
+    [ "$skip" == "True" ] || printf '%s\n' "$t"
+  done
+}
 
 # Keys the "add additional unit" menu offers a buffer toggle for.
 UNIT_ADDITIONAL_BUFFER_SAFE=(
@@ -741,4 +762,23 @@ unit_additional_menu_row_EMU() {
   printf "1. EMU Name: %s \n" "$boxturtle_name"
   printf "G. EMU Lane Count : %s \n" "$emu_num_lanes"
   printf "H. EMU Board Type : %s \n" "$emu_board_type"
+}
+
+# ─── Bondtech INDX ───────────────────────────────────────────────────────────
+# Toolchanger, not a filament unit: installs the INDX hardware template and the
+# vendored INDX macros (include/indx_functions.sh). No buffer target and no
+# "additional unit" support.
+
+unit_copy_files_INDX() {
+  install_indx_files
+}
+
+unit_message_INDX() {
+  message+="""
+- Configure the Smart Head ([mcu indxmcu], [indx], [extruder], [load_cell_probe]) in printer.cfg
+  as described in the INDX README. AFC uses Kalico's built in INDX support.
+
+- Set tool_count, dock positions and clearance_y in ${afc_config_dir}/indx/indx.cfg, then
+  match the [AFC_extruder toolN] sections in ${afc_config_dir}/AFC_Hardware.cfg to tool_count.
+${indx_message}"""
 }

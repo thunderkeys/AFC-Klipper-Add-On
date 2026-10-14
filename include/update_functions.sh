@@ -45,6 +45,7 @@ AFC Macros update skipped (all ${_macro_skipped} files kept as-is).
   fi
   check_init_symlink
   link_extensions
+  update_indx_macros
   remove_t_macros
   remove_velocity
   if [ "$git_install" == "True" ]; then

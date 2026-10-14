@@ -62,6 +62,7 @@ source "$REPO_ROOT/include/utils.sh"
 source "$REPO_ROOT/include/check_commands.sh"
 source "$REPO_ROOT/include/buffer_configurations.sh"
 source "$REPO_ROOT/include/emu_templater.sh"
+source "$REPO_ROOT/include/indx_functions.sh"
 source "$REPO_ROOT/include/install_functions.sh"
 source "$REPO_ROOT/include/unit_functions.sh"
 
