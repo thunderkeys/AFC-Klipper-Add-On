@@ -1985,7 +1985,7 @@ class TestToolLoad_DestExtruderAlreadyLoaded:
         target_lane.tool_swap = MagicMock()
 
         call_order = []
-        target_lane.tool_swap.side_effect = lambda: call_order.append("swap")
+        target_lane.tool_swap.side_effect = lambda: (call_order.append("swap"), True)[1]
         obj.TOOL_UNLOAD.side_effect = lambda *a, **kw: (call_order.append("unload"), True)[1]
 
         obj.TOOL_LOAD(target_lane)

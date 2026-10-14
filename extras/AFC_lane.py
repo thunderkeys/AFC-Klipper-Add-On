@@ -1857,12 +1857,15 @@ class AFCLane:
         # No else: do not trigger infinite runout or pause runout here
 
     # Toolchanger functions
-    def tool_swap(self):
+    def tool_swap(self) -> bool:
         """
         Helper function for calling extruder's tool_swap function
+
+        :return bool: False if the toolchanger failed to swap, True otherwise
         """
         if self.extruder_obj.tc_unit_obj is not None:
-            self.extruder_obj.tc_unit_obj.tool_swap(self, set_start_time=False)
+            return self.extruder_obj.tc_unit_obj.tool_swap(self, set_start_time=False)
+        return True
 
 
     def _mapped_keys(self) -> list:

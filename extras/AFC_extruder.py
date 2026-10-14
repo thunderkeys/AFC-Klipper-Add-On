@@ -16,7 +16,7 @@ except ImportError:
 from configparser import Error as error
 from math import ceil
 
-from typing import TYPE_CHECKING, Optional, Union, Dict
+from typing import TYPE_CHECKING, Any, Optional, Union, Dict
 
 if TYPE_CHECKING:
     from klippy import Printer
@@ -1237,7 +1237,7 @@ class AFCExtruder:
             raise gcmd.error(error_string)
 
     def get_status(self, eventtime=None):
-        self.response = {}
+        self.response: Dict[str, Any] = {}
         self.response['tool_stn'] = self.tool_stn
         self.response['tool_stn_unload'] = self.tool_stn_unload
         self.response['tool_sensor_after_extruder'] = self.tool_sensor_after_extruder
@@ -1251,6 +1251,7 @@ class AFCExtruder:
         self.response['tool_end_status'] = bool(self.tool_end_state)
         self.response['lanes'] = [lane.name for lane in self.lanes.values()]
         self.response['on_shuttle'] = self.on_shuttle()
+        self.response['tool_index'] = self.tool_index
         self.response['is_standalone'] = self.is_standalone()
         self.response['next_pickup'] = self.next_pickup
         self.response['status'] = self.status

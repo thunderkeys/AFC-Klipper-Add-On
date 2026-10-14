@@ -40,8 +40,12 @@ except:
     err_str = ERROR_STR.format(import_lib="AFC_toolchanger_backend", trace=traceback.format_exc())
     raise error(err_str)
 
+try: from extras.AFC_indx import IndxBackend
+except: raise error(ERROR_STR.format(import_lib="AFC_indx", trace=traceback.format_exc()))
+
 BACKENDS: dict[str, type[ToolchangerBackend]] = {
     KtcBackend.name: KtcBackend,
+    IndxBackend.name: IndxBackend,
 }
 
 
@@ -188,7 +192,11 @@ class AfcToolchanger(afcUnit):
         self.afc.current_state = State.TOOL_DOCK
         if current_extruder:
             current_extruder.status = State.TOOL_DOCK
-        self.backend.unselect(current_extruder)
+        if not self.backend.unselect(current_extruder):
+            self.afc.current_state = State.IDLE
+            if current_extruder:
+                current_extruder.status = State.IDLE
+            return
 
         self.afc.function.handle_activate_extruder()
 
@@ -217,7 +225,7 @@ class AfcToolchanger(afcUnit):
         self.backend.handle_ready()
 
     def tool_swap(self, lane: AFCLane, set_start_time: bool=True,
-                  target_temp: Optional[float]=None) -> None:
+                  target_temp: Optional[float]=None) -> bool:
         """
         Perform a tool swap operation for the specified lane.
 
@@ -229,6 +237,7 @@ class AfcToolchanger(afcUnit):
         :param set_start_time: Set true to set a starting time for afcDeltaTime.
         :param target_temp: Temperature for the incoming tool, used by backends that heat on
             pickup
+        :return bool: True if the tool swap succeeded
         """
         if set_start_time:
             self.afc.afcDeltaTime.set_start_time()
@@ -247,8 +256,16 @@ class AfcToolchanger(afcUnit):
             self.afc.last_gcode_position[i] -= self.afc.gcode_move.base_position[i]
         # Perform a tool swap by selecting the appropriate extruder based on the lane's extruder object.
         self.afc.afcDeltaTime.log_with_time("Performing tool swap")
-        self.backend.select(lane.extruder_obj, target_temp)
+        selected = self.backend.select(lane.extruder_obj, target_temp)
         lane.extruder_obj.next_pickup = False
+        if not selected:
+            lane.extruder_obj.status = self.afc.current_state = State.IDLE
+            if current_extruder:
+                current_extruder.status = State.IDLE
+            # Restore the saved position offsets so a later restore_pos stays consistent
+            for i in range(0, 3):
+                self.afc.last_gcode_position[i] += self.afc.gcode_move.base_position[i]
+            return False
 
         if current_extruder:
             current_extruder.status = State.IDLE
@@ -273,6 +290,7 @@ class AfcToolchanger(afcUnit):
 
         self.afc.function.log_toolhead_pos("After toolswap: ")
         lane.extruder_obj.estats.tool_selected.increase_count()
+        return True
 
     cmd_AFC_SET_TOOLHEAD_LED_help = "Turns on leds for toolhead specified by mapping, does not affect status led if status_led_idx variable is provided"
     cmd_AFC_SET_TOOLHEAD_LED_options = {
