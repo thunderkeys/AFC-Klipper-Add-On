@@ -111,6 +111,7 @@ class afc:
 
         self.current_loading    = None
         self.next_lane_load     = None
+        self.next_tool_temp: Optional[float] = None    # Incoming tool temp during CHANGE_TOOL
         self.error_state        = False
         self.current_state      = State.INIT
         self.position_saved     = False
@@ -2591,6 +2592,15 @@ class afc:
             adjusting_temperature: bool = new_extruder_temp is not None or \
                 (infinite_runout and self.function.get_current_extruder() != next_extruder)
 
+            if cur_lane.extruder_obj.heats_on_pickup:
+                # Shared heater (INDX): the toolchanger heats the incoming tool after pickup, so
+                # there is nothing to preheat or cool down here.
+                self.next_tool_temp = new_extruder_temp
+                if (adjusting_temperature
+                    and infinite_runout):
+                    cur_lane.status = AFCLaneState.LOADED
+                adjusting_temperature = False
+
             _last_lane = None
             if adjusting_temperature:
                 # Heat the next extruder FIRST so that _heat_next_extruder reads the
@@ -2718,6 +2728,7 @@ class afc:
             )
         finally:
             self.next_lane_load = None
+            self.next_tool_temp = None
             self.function.log_toolhead_pos("Final Change Tool: Error State: {}, Is Paused {}, Position_saved {}, in toolchange: {}, POS: ".format(
                     self.error_state, self.function.is_paused(), self.position_saved, self.in_toolchange ))
 
@@ -2884,6 +2895,8 @@ class afc:
         snapmaker_param_a: int = gcmd.get_int('A', None)
 
         curr_extruder = self.function.get_current_extruder_obj()
+        # Tool targeted by T, used to apply shared heater (INDX) rules below
+        t_tool: Optional[AFCExtruder] = None
 
         if toolnum is not None:
             map = "T{}".format(toolnum)
@@ -2905,6 +2918,7 @@ class afc:
                 extruder = self.tools.get(th_extruder_name, self.toolhead.get_extruder())
             elif lane is not None:
                 extruder = lane.extruder_obj
+                t_tool = lane.extruder_obj
 
                 # Checking if slicer is trying to set temperature(ooze prevention) for another lane
                 #   thats connected to the currently loaded extruder. Bypass this check if current
@@ -2934,6 +2948,17 @@ class afc:
                 return
         else:
             extruder = self.toolhead.get_extruder()
+
+        shared_backend = self.function.get_shared_backend()
+        if (shared_backend is not None
+            and (t_tool is None or t_tool.shared_extruder)):
+            filtered = shared_backend.filter_heat(t_tool, temp, "M109" if wait else "M104")
+            if filtered is None:
+                return
+            if filtered != temp:
+                # Held at 0 for a tool with no hotend, nothing to wait for
+                wait = False
+            temp = filtered
 
         pheaters = self.printer.lookup_object('heaters')
         heater = extruder.get_heater()

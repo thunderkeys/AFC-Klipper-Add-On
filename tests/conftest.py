@@ -517,6 +517,7 @@ class MockAFC:
         self.led_buffer_neutral = "1,1,1,1"
         self.led_buffer_disabled = "0,0,0,0.25"
         self.current = None
+        self.next_tool_temp = None
         self.enable_sensors_in_gui = False
         self.debounce_delay = 0.1
         self.enable_hub_runout = False

@@ -401,6 +401,16 @@ class AFCExtruder:
                     and self.tc_unit_obj.backend.shared_extruder)
 
     @property
+    def heats_on_pickup(self) -> bool:
+        """
+        True when the toolchanger heats this tool only once it is on the head (INDX).
+
+        :return bool: True if attached toolchanger backend heats on pickup
+        """
+        return bool(self.tc_unit_obj is not None
+                    and self.tc_unit_obj.backend.heats_on_pickup)
+
+    @property
     def tool_key(self) -> str:
         """
         Key used for this tool in afc.tools. Shared extruder tools are keyed by AFC_extruder

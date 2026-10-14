@@ -73,6 +73,18 @@ class ToolchangerBackend:
         """
         raise NotImplementedError
 
+    def filter_heat(self, tool: Optional[AFCExtruder], temp: float, cmd: str) -> Optional[float]:
+        """
+        Adjusts an M104/M109 request for backends with a shared heater. Base backend leaves it
+        unchanged.
+
+        :param tool: Tool targeted by the T parameter, None when no T was given
+        :param temp: Requested temperature
+        :param cmd: Command name for console messages
+        :return float|None: Temperature to apply, None to skip the request entirely
+        """
+        return temp
+
     def active_tool(self) -> Optional[AFCExtruder]:
         """
         Return the tool on the head when the backend tracks it independently of the active

@@ -337,3 +337,175 @@ class TestToolSwapWithIndx:
         unit.afc.function.handle_activate_extruder.assert_not_called()
         assert unit.afc.current_state == State.IDLE
 
+
+# ── Heating rules (filter_heat, M104/M109, CHANGE_TOOL) ──────────────────────
+
+class TestFilterHeat:
+    def test_t_for_parked_tool_ignored(self):
+        _, backend, _, tools = _make_indx(active=0)
+        backend.handle_ready()
+        assert backend.filter_heat(tools[1], 220.0, "M104") is None
+
+    def test_t_for_tool_on_head_passes(self):
+        _, backend, _, tools = _make_indx(active=1)
+        backend.handle_ready()
+        assert backend.filter_heat(tools[1], 220.0, "M104") == 220.0
+
+    def test_empty_head_not_heated(self):
+        unit, backend, _, _ = _make_indx(active=-1)
+        backend.handle_ready()
+        assert backend.filter_heat(None, 220.0, "M109") is None
+        assert any("no tool on the head" in m for _, m in backend.logger.messages)
+
+    def test_empty_head_zero_allowed(self):
+        _, backend, _, _ = _make_indx(active=-1)
+        backend.handle_ready()
+        assert backend.filter_heat(None, 0.0, "M104") == 0.0
+
+    def test_no_heat_tool_held_at_zero(self):
+        unit, backend, _, _ = _make_indx(active=2)
+        unit.printer._objects["gcode_macro TOOL_POSITIONS"].variables["no_heat_tools"] = [2]
+        backend.handle_ready()
+        assert backend.filter_heat(None, 220.0, "M104") == 0.0
+        assert any("no_heat_tools" in m for _, m in backend.logger.messages)
+
+    def test_no_heat_read_live(self):
+        unit, backend, _, _ = _make_indx(active=2)
+        backend.handle_ready()
+        assert backend.filter_heat(None, 220.0, "M104") == 220.0
+        unit.printer._objects["gcode_macro TOOL_POSITIONS"].variables["no_heat_tools"] = [2]
+        assert backend.filter_heat(None, 220.0, "M104") == 0.0
+
+    def test_base_backend_passthrough(self):
+        from extras.AFC_toolchanger_backend import KtcBackend
+        backend = KtcBackend(_make_toolchanger())
+        assert backend.filter_heat(None, 210.0, "M104") == 210.0
+
+
+def _make_afc_for_m109(backend, t_lane=None):
+    from tests.test_AFC import _make_afc
+    obj = _make_afc()
+    obj.disable_ooze_check = True
+    obj.snapmaker_printer = False
+    obj.function.get_current_extruder_obj.return_value = None
+    obj.function.get_lane_by_map.return_value = t_lane
+    obj.function.get_shared_backend.return_value = backend
+    heater = MagicMock()
+    heater.get_temp.return_value = (20.0, 0.0)
+    obj.toolhead.get_extruder.return_value.get_heater.return_value = heater
+    if t_lane is not None:
+        t_lane.extruder_obj.get_heater.return_value = heater
+    heaters = obj.printer.lookup_object("heaters")
+    return obj, heaters, heater
+
+
+class TestM104WithIndx:
+    def test_no_t_applies_temp(self):
+        _, backend, _, _ = _make_indx(active=0)
+        backend.handle_ready()
+        obj, heaters, heater = _make_afc_for_m109(backend)
+        obj.cmd_AFC_M104(MockGCodeCommand(params={"S": 210.0}))
+        heaters.set_temperature.assert_called_with(heater, 210.0, False)
+
+    def test_empty_head_skips(self):
+        _, backend, _, _ = _make_indx(active=-1)
+        backend.handle_ready()
+        obj, heaters, _ = _make_afc_for_m109(backend)
+        obj.cmd_AFC_M104(MockGCodeCommand(params={"S": 210.0}))
+        heaters.set_temperature.assert_not_called()
+
+    def test_t_for_parked_tool_skips(self):
+        _, backend, _, tools = _make_indx(active=0)
+        backend.handle_ready()
+        tools[1].shared_extruder = True
+        obj, heaters, _ = _make_afc_for_m109(backend, t_lane=tools[1].tc_lane)
+        obj.cmd_AFC_M104(MockGCodeCommand(params={"S": 210.0, "T": 1}))
+        heaters.set_temperature.assert_not_called()
+
+    def test_t_for_active_tool_heats(self):
+        _, backend, _, tools = _make_indx(active=1)
+        backend.handle_ready()
+        tools[1].shared_extruder = True
+        obj, heaters, heater = _make_afc_for_m109(backend, t_lane=tools[1].tc_lane)
+        obj.cmd_AFC_M109(MockGCodeCommand(params={"S": 215.0, "T": 1}))
+        heaters.set_temperature.assert_any_call(heater, 215.0, False)
+
+    def test_no_heat_tool_set_to_zero(self):
+        unit, backend, _, _ = _make_indx(active=2)
+        unit.printer._objects["gcode_macro TOOL_POSITIONS"].variables["no_heat_tools"] = [2]
+        backend.handle_ready()
+        obj, heaters, heater = _make_afc_for_m109(backend)
+        obj.cmd_AFC_M109(MockGCodeCommand(params={"S": 215.0}))
+        heaters.set_temperature.assert_called_with(heater, 0.0, False)
+
+    def test_without_shared_backend_unchanged(self):
+        obj, heaters, heater = _make_afc_for_m109(None)
+        obj.cmd_AFC_M104(MockGCodeCommand(params={"S": 205.0}))
+        heaters.set_temperature.assert_called_with(heater, 205.0, False)
+
+    def test_t_for_non_shared_tool_bypasses_filter(self):
+        backend = MagicMock()
+        lane = MagicMock()
+        lane.extruder_obj.shared_extruder = False
+        obj, heaters, heater = _make_afc_for_m109(backend, t_lane=lane)
+        obj.cmd_AFC_M104(MockGCodeCommand(params={"S": 205.0, "T": 3}))
+        backend.filter_heat.assert_not_called()
+        heaters.set_temperature.assert_called_with(heater, 205.0, False)
+
+
+class TestChangeToolHeatsOnPickup:
+    def _setup(self):
+        from tests.test_AFC import _make_afc_for_change_tool
+        obj, cur_lane, current_lane = _make_afc_for_change_tool()
+        cur_lane.extruder_obj.heats_on_pickup = True
+        current_lane.extruder_obj.heats_on_pickup = True
+        captured = {}
+        obj.TOOL_LOAD.side_effect = lambda *a, **k: (captured.update(
+            temp=obj.next_tool_temp), True)[1]
+        return obj, cur_lane, current_lane, captured
+
+    def test_no_preheat_or_cooldown(self):
+        obj, cur_lane, _, _ = self._setup()
+        obj.CHANGE_TOOL(cur_lane, new_extruder_temp=230.0)
+        obj._heat_next_extruder.assert_not_called()
+        obj._cooldown_last_extruder.assert_not_called()
+        obj._wait_for_temp_within_tolerance.assert_not_called()
+
+    def test_temp_available_during_load_then_cleared(self):
+        obj, cur_lane, _, captured = self._setup()
+        obj.CHANGE_TOOL(cur_lane, new_extruder_temp=230.0)
+        assert captured["temp"] == 230.0
+        assert obj.next_tool_temp is None
+
+    def test_no_temp_passes_none(self):
+        obj, cur_lane, _, captured = self._setup()
+        obj.CHANGE_TOOL(cur_lane)
+        assert captured["temp"] is None
+
+    def test_infinite_runout_resets_status_without_preheat(self):
+        from extras.AFC_lane import AFCLaneState
+        obj, cur_lane, _, _ = self._setup()
+        cur_lane.status = AFCLaneState.INFINITE_RUNOUT
+        obj.CHANGE_TOOL(cur_lane)
+        assert cur_lane.status == AFCLaneState.LOADED
+        obj._heat_next_extruder.assert_not_called()
+
+
+class TestLaneToolSwapPassesTemp:
+    def test_lane_tool_swap_uses_next_tool_temp(self):
+        from tests.test_AFC_lane import _make_afc_lane
+        lane = _make_afc_lane("AFC_stepper lane1")
+        lane.extruder_obj = MagicMock()
+        lane.extruder_obj.tc_unit_obj.tool_swap.return_value = True
+        lane.afc.next_tool_temp = 240.0
+        assert lane.tool_swap() is True
+        lane.extruder_obj.tc_unit_obj.tool_swap.assert_called_once_with(
+            lane, set_start_time=False, target_temp=240.0)
+
+    def test_lane_tool_swap_without_unit(self):
+        from tests.test_AFC_lane import _make_afc_lane
+        lane = _make_afc_lane("AFC_stepper lane1")
+        lane.extruder_obj = MagicMock()
+        lane.extruder_obj.tc_unit_obj = None
+        assert lane.tool_swap() is True
+

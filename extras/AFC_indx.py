@@ -135,6 +135,44 @@ class IndxBackend(ToolchangerBackend):
         return (extruder.tool_index is not None
                 and extruder.tool_index == self.active_index())
 
+    def no_heat_indexes(self) -> list[int]:
+        """
+        Tool numbers listed in INDX `no_heat_tools`, tools that carry no hotend.
+
+        :return list: Tool numbers that are never heated
+        """
+        if self.positions_macro is None:
+            return []
+        return [int(i) for i in self.positions_macro.variables.get("no_heat_tools", [])]
+
+    def filter_heat(self, tool: Optional[AFCExtruder], temp: float, cmd: str) -> Optional[float]:
+        """
+        Applies INDX heating rules to M104/M109. A T for a tool that is not on the head is
+        ignored since slicers send these for parked tools. An empty head is never heated, and a
+        tool in no_heat_tools is held at 0.
+
+        :param tool: Tool targeted by the T parameter, None when no T was given
+        :param temp: Requested temperature
+        :param cmd: Command name for console messages
+        :return float|None: Temperature to apply, None to skip the request entirely
+        """
+        if (tool is not None
+            and not self.is_on_head(tool)):
+            return None
+        index = self.active_index()
+        if index < 0:
+            if temp > 0:
+                self.logger.info(f"{cmd} S{temp:g}: no tool on the head, not heating "
+                                 "(INDX heats each tool at pickup)")
+                return None
+            return temp
+        if (temp > 0
+            and index in self.no_heat_indexes()):
+            self.logger.info(f"{cmd} S{temp:g}: T{index} has no hotend (no_heat_tools), "
+                             "not heating")
+            return 0.0
+        return temp
+
     def select(self, extruder: AFCExtruder, target_temp: Optional[float]=None) -> bool:
         """
         Picks up a tool with INDX_CHANGE_TOOL, heating it to target_temp after pickup.

@@ -939,6 +939,7 @@ def _make_afc_for_change_tool(lane_name="lane2", next_extruder_name="extruder1",
     current_extruder = MagicMock()
     current_extruder.th_extruder_name = current_extruder.name = current_extruder_name
     current_extruder.tool_key = current_extruder_name
+    current_extruder.heats_on_pickup = current_extruder.shared_extruder = False
     current_extruder.get_heater = MagicMock(return_value=MagicMock())
     current_extruder.deadband = 2.0
     current_extruder.estats = MagicMock()
@@ -952,6 +953,7 @@ def _make_afc_for_change_tool(lane_name="lane2", next_extruder_name="extruder1",
     next_extruder = MagicMock()
     next_extruder.th_extruder_name = next_extruder.name = next_extruder_name
     next_extruder.tool_key = next_extruder_name
+    next_extruder.heats_on_pickup = next_extruder.shared_extruder = False
     next_extruder.get_heater = MagicMock(return_value=MagicMock())
     next_extruder.deadband = 2.0
     next_extruder.estats = MagicMock()

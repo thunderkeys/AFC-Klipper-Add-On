@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from extras.AFC_hub import afc_hub
     from gcode import GCodeCommand
     from extras.gcode_move import GCodeMove
+    from extras.AFC_toolchanger_backend import ToolchangerBackend
 
 try: from extras.AFC_utils import ERROR_STR
 except: raise error("Error when trying to import AFC_utils.ERROR_STR\n{trace}".format(trace=traceback.format_exc()))
@@ -528,6 +529,18 @@ class afcFunction:
                 and tool.tc_unit_obj is not None):
                 active = tool.tc_unit_obj.backend.active_tool()
                 return active.tool_key if active is not None else None
+        return None
+
+    def get_shared_backend(self) -> Optional[ToolchangerBackend]:
+        """
+        Backend of the shared extruder toolchanger (INDX), if one is configured.
+
+        :return ToolchangerBackend|None: Shared extruder backend, None if not configured
+        """
+        for tool in self.afc.tools.values():
+            if (tool.shared_extruder
+                and tool.tc_unit_obj is not None):
+                return tool.tc_unit_obj.backend
         return None
 
     def get_tool(self, name: str) -> Optional[AFCExtruder]:

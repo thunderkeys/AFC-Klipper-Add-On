@@ -1864,7 +1864,8 @@ class AFCLane:
         :return bool: False if the toolchanger failed to swap, True otherwise
         """
         if self.extruder_obj.tc_unit_obj is not None:
-            return self.extruder_obj.tc_unit_obj.tool_swap(self, set_start_time=False)
+            return self.extruder_obj.tc_unit_obj.tool_swap(
+                self, set_start_time=False, target_temp=self.afc.next_tool_temp)
         return True
 
 
