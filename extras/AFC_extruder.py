@@ -1011,10 +1011,23 @@ class AFCExtruder:
 
         return True, ""
 
-    def on_shuttle(self):
+    def on_shuttle(self) -> bool:
         """
         Helper function to easily detect if a toolhead is on the shuttle or not. This function is
-        for toolchangers and will return True for single toolhead printers.
+        for toolchangers and will return True for single toolhead printers. When a toolchanger
+        unit is attached, its backend decides.
+
+        :return bool: True if the tool is on the shuttle. Always returns True for single
+                      toolhead printers.
+        """
+        if self.tc_unit_obj is not None:
+            return self.tc_unit_obj.backend.is_on_head(self)
+        return self.detect_on_shuttle()
+
+    def detect_on_shuttle(self) -> bool:
+        """
+        Detects if the toolhead is on the shuttle using KTC tool detection or the U1 park
+        detector. Returns True for single toolhead printers.
 
         :return bool: True if toolheads optotap sensor is triggered. Always returns True for single
                       toolhead printers.
@@ -1036,14 +1049,14 @@ class AFCExtruder:
         if (self.tool_obj
             and hasattr(self.tool_obj, "detect_state")):
             from extras.toolchanger import DETECT_PRESENT
-            return (
+            return bool(
                 self.tool_obj.detect_state == DETECT_PRESENT or
                 self.tool_obj.main_toolchanger.get_selected_tool() == self.tool_obj
             )
         elif(self.park_detector_obj
              and hasattr(self.park_detector_obj, "get_park_detector_status")):
             status = self.park_detector_obj.get_park_detector_status()
-            return status.get('state') == 'ACTIVATE'
+            return bool(status.get('state') == 'ACTIVATE')
         else:
             return False
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 import traceback
 from configparser import Error as error
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from configfile import ConfigWrapper
@@ -35,6 +35,15 @@ except: raise error(ERROR_STR.format(import_lib="AFC", trace=traceback.format_ex
 try: from extras.AFC_lane import AFCMoveWarning, SpeedMode, AssistActive
 except: raise error(ERROR_STR.format(import_lib="AFC_lane", trace=traceback.format_exc()))
 
+try: from extras.AFC_toolchanger_backend import ToolchangerBackend, KtcBackend
+except:
+    err_str = ERROR_STR.format(import_lib="AFC_toolchanger_backend", trace=traceback.format_exc())
+    raise error(err_str)
+
+BACKENDS: dict[str, type[ToolchangerBackend]] = {
+    KtcBackend.name: KtcBackend,
+}
+
 
 class AfcToolchanger(afcUnit):
     def __init__(self, config: ConfigWrapper) -> None:
@@ -43,6 +52,14 @@ class AfcToolchanger(afcUnit):
         self.logo       = '<span class=success--text>Toolchanger Ready\n</span>'
         self.logo_error = '<span class=error--text>Toolchanger Not Ready</span>\n'
         self.functions: afcFunction = self.printer.load_object(config, 'AFC_functions')
+
+        backend_name = config.get("backend", "ktc").lower()
+        backend_cls = BACKENDS.get(backend_name)
+        if backend_cls is None:
+            error_str = (f"[{' '.join(self.full_name)}] invalid backend '{backend_name}', "
+                         f"valid options: {', '.join(sorted(BACKENDS))}")
+            raise error(error_str)
+        self.backend: ToolchangerBackend = backend_cls(self)
 
         self.functions.register_commands(self.afc.show_macros, "AFC_SELECT_TOOL",
                                          self.cmd_AFC_SELECT_TOOL, self.cmd_AFC_SELECT_TOOL_help,
@@ -171,12 +188,7 @@ class AfcToolchanger(afcUnit):
         self.afc.current_state = State.TOOL_DOCK
         if current_extruder:
             current_extruder.status = State.TOOL_DOCK
-        if (current_extruder
-            and current_extruder.custom_unselect):
-            self.logger.info(f"Running custom unselect: {current_extruder.custom_unselect}")
-            self.afc.gcode.run_script_from_command(f"{current_extruder.custom_unselect}")
-        else:
-            self.afc.gcode.run_script_from_command("UNSELECT_TOOL")
+        self.backend.unselect(current_extruder)
 
         self.afc.function.handle_activate_extruder()
 
@@ -197,7 +209,15 @@ class AfcToolchanger(afcUnit):
             current_extruder.status = State.IDLE
 
 
-    def tool_swap(self, lane: AFCLane, set_start_time=True):
+    def handle_ready(self) -> None:
+        """
+        Klippy ready callback, lets the backend validate and resolve its objects.
+        """
+        super().handle_ready()
+        self.backend.handle_ready()
+
+    def tool_swap(self, lane: AFCLane, set_start_time: bool=True,
+                  target_temp: Optional[float]=None) -> None:
         """
         Perform a tool swap operation for the specified lane.
 
@@ -207,8 +227,8 @@ class AfcToolchanger(afcUnit):
 
         :param lane: The lane object whose extruder/toolhead should be activated.
         :param set_start_time: Set true to set a starting time for afcDeltaTime.
-
-        :return: None
+        :param target_temp: Temperature for the incoming tool, used by backends that heat on
+            pickup
         """
         if set_start_time:
             self.afc.afcDeltaTime.set_start_time()
@@ -227,14 +247,7 @@ class AfcToolchanger(afcUnit):
             self.afc.last_gcode_position[i] -= self.afc.gcode_move.base_position[i]
         # Perform a tool swap by selecting the appropriate extruder based on the lane's extruder object.
         self.afc.afcDeltaTime.log_with_time("Performing tool swap")
-        name = lane.extruder_obj.th_extruder_name
-        tool_index = 0 if name == "extruder" else int(name.replace("extruder", ""))
-
-        if lane.extruder_obj.custom_tool_swap:
-            self.logger.info(f"Running custom select: {lane.extruder_obj.custom_tool_swap}")
-            self.afc.gcode.run_script_from_command(f"{lane.extruder_obj.custom_tool_swap}")
-        else:
-            self.afc.gcode.run_script_from_command('SELECT_TOOL T={}'.format(tool_index))
+        self.backend.select(lane.extruder_obj, target_temp)
         lane.extruder_obj.next_pickup = False
 
         if current_extruder:
