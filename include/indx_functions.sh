@@ -12,7 +12,10 @@
 # settings file and is only copied when it does not exist yet.
 INDX_MACRO_FILES=("indx-tc-macros.cfg" "indx-cal.cfg" "homing.cfg")
 INDX_USER_FILE="indx.cfg"
+INDX_MAX_TOOLS=32
 indx_message=""
+# Number of INDX tools to configure on install, set from the install menu
+indx_tool_count="${indx_tool_count:-3}"
 
 indx_find_section() {
   # Prints the config files outside ${afc_config_dir} that define section $1
@@ -117,3 +120,74 @@ INDX macros updated.
   fi
 }
 
+indx_valid_tool_count() {
+  # True (0) if $1 is a whole number between 1 and INDX_MAX_TOOLS.
+  [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le "$INDX_MAX_TOOLS" ]
+}
+
+indx_set_tool_count() {
+  # Sets the number of INDX tools in the installed config: [AFC_extruder toolN]
+  # sections in AFC_Hardware.cfg, plus tool_count, dock position placeholders
+  # and T(n) wrappers in indx/indx.cfg (utilities/indx_tools.py).
+  # Arguments:
+  #   $1: count - number of tools
+  # Appends the result to $indx_message. Returns 1 if the update failed.
+  local count="$1"
+  local py="${PYTHON:-python3}"
+  local output
+  if ! output="$("$py" "${afc_path}/utilities/indx_tools.py" --config-dir "${afc_config_dir}" \
+      set-count "$count" 2>&1)"; then
+    indx_message+="""
+${RED}- Failed to set the INDX tool count to ${count}:
+${output}${NC}
+"""
+    return 1
+  fi
+  indx_message+="""
+- INDX tool count set to ${count}:
+${output}
+"""
+}
+
+indx_tool_count_prompt() {
+  # Asks for the number of INDX tools and stores it in indx_tool_count. Sets
+  # indx_prompt_ok to True or False and $message. Always returns 0, menus call
+  # it as a bare statement under `set -e`.
+  local input
+  read -p "Enter the number of INDX tools (1-${INDX_MAX_TOOLS}) [${indx_tool_count}]: " input \
+    || true
+  input="${input:-$indx_tool_count}"
+  if indx_valid_tool_count "$input"; then
+    indx_tool_count="$input"
+    indx_prompt_ok="True"
+    message="INDX tool count: ${indx_tool_count}"
+  else
+    indx_prompt_ok="False"
+    message="${RED}Invalid tool count '${input}', enter a number from 1 to ${INDX_MAX_TOOLS}${NC}"
+  fi
+}
+
+indx_change_tool_count() {
+  # Utilities menu: change the tool count of an existing INDX install. The
+  # utilities menu shows $unit_message.
+  local current
+  if [ ! -f "${afc_config_dir}/indx/${INDX_USER_FILE}" ]; then
+    unit_message="${RED}No INDX install found in ${afc_config_dir}/indx${NC}"
+    return 0
+  fi
+  current="$(grep -oE '^variable_tool_count:[[:space:]]*[0-9]+' \
+    "${afc_config_dir}/indx/${INDX_USER_FILE}" | grep -oE '[0-9]+$' || true)"
+  indx_tool_count="${current:-$indx_tool_count}"
+  indx_tool_count_prompt
+  if [ "$indx_prompt_ok" != "True" ]; then
+    unit_message="$message"
+    return 0
+  fi
+  indx_message=""
+  if indx_set_tool_count "$indx_tool_count"; then
+    unit_message="${indx_message}
+Restart Klipper to apply."
+  else
+    unit_message="$indx_message"
+  fi
+}

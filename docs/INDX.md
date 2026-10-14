@@ -42,8 +42,27 @@ pin_tool_start: virtual     # passive tools have no sensors
 standalone_auto_load_unload: False
 ```
 
-Add one `[AFC_extruder]` per installed tool, matching `tool_count` in `indx.cfg`. For tools past
-T3, also add a `[gcode_macro T<n>]` wrapper with `variable_active: False` to `indx.cfg`.
+There is one `[AFC_extruder]` per installed tool, matching `tool_count` in `indx.cfg`. The
+installer asks for the number of tools (option **J** in the install menu). To change it later, use
+**Set INDX tool count** in the installer's utilities menu, or run:
+
+```shell
+~/AFC-Klipper-Add-On/utilities/indx_tools.py set-count 6
+~/AFC-Klipper-Add-On/utilities/indx_tools.py show
+```
+
+This keeps `AFC_Hardware.cfg` and `indx.cfg` in step:
+
+- New `[AFC_extruder toolN]` sections copy the settings of your lowest numbered tool, with
+  `tool_index` and `map` changed. Lowering the count removes the extra sections.
+- In `indx.cfg` it updates `tool_count`, adds a `[gcode_macro T<n>]` wrapper per tool and removes
+  wrappers past the new count.
+- New tools get placeholder dock positions (`t<n>_x`, `t<n>_dock_y`), spaced like your last two
+  docks. Measure them with `CALIBRATE_DOCK_X TOOL=<n>`. Adding a dock sets `docks_calibrated` to
+  `False` so INDX does not drive into a placeholder position. Set it back to `True` once every dock
+  is measured. Dock positions of removed tools are left in place.
+
+Restart Klipper afterwards.
 
 AFC checks at startup that `[save_variables]` and the INDX macros are loaded, that every tool
 has a unique `tool_index` below `tool_count`, and that all tools use the same extruder.

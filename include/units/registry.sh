@@ -771,6 +771,11 @@ unit_additional_menu_row_EMU() {
 
 unit_copy_files_INDX() {
   install_indx_files
+  indx_set_tool_count "$indx_tool_count" || true
+}
+
+unit_install_menu_options_INDX() {
+  printf "J. INDX tool count : %s \n" "$indx_tool_count"
 }
 
 unit_message_INDX() {

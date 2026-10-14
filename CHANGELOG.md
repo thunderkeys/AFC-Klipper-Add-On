@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user's `indx.cfg`.
 - `utilities/indx_resync.py` merges upstream INDX macro changes into the vendored copy. See
   `docs/INDX_macro_resync.md`.
+- `utilities/indx_tools.py set-count <n>` sets the number of INDX tools (AFC_extruder sections,
+  `tool_count`, dock position placeholders and T(n) wrappers). The installer asks for the tool count
+  and offers it in the utilities menu for existing installs.
 ### Changed
 - `AFC_Toolchanger` select and unselect moved into a backend. KTC and custom swap/unselect behave
   as before.

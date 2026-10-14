@@ -172,6 +172,12 @@ install_menu() {
         elif  [ "$installation_type" == "Claymore" ]; then
           cycle_array htlf2_board_types board_counter htlf2_board_type "Claymore Board Type"
         fi ;;
+      J)
+        if [ "$installation_type" == "Bondtech INDX" ]; then
+          indx_tool_count_prompt
+        else
+          message="Tool count is only used for Bondtech INDX"
+        fi ;;
       I)
         if [ "$toolhead_sensor" == "Ramming" ] \
            && { [ "$buffer_type" == "Unknown" ] || [ "$buffer_type" == "None" ]; } \

@@ -116,3 +116,51 @@ def test_copy_unit_files_dispatches_to_indx(tmp_path):
     assert (cfg / "AFC" / "indx" / "indx-tc-macros.cfg").exists()
     assert "[AFC_Toolchanger INDX]" in (cfg / "AFC" / "AFC_Hardware.cfg").read_text()
 
+
+def test_install_with_six_tools(tmp_path):
+    proc, cfg = _run(tmp_path, 'indx_tool_count=6\ninstallation_type="Bondtech INDX"\n'
+                               'copy_unit_files\necho "$indx_message"')
+    hw = (cfg / "AFC" / "AFC_Hardware.cfg").read_text()
+    for i in range(6):
+        assert f"[AFC_extruder tool{i}]" in hw
+    assert "variable_tool_count: 6" in (cfg / "AFC" / "indx" / "indx.cfg").read_text()
+    assert "INDX tool count set to 6" in proc.stdout
+
+
+def test_install_default_three_tools(tmp_path):
+    _, cfg = _run(tmp_path, 'installation_type="Bondtech INDX"\ncopy_unit_files')
+    hw = (cfg / "AFC" / "AFC_Hardware.cfg").read_text()
+    assert "[AFC_extruder tool2]" in hw
+    assert "[AFC_extruder tool3]" not in hw
+
+
+def test_prompt_accepts_and_rejects(tmp_path):
+    proc, _ = _run(tmp_path, 'indx_tool_count_prompt\necho "ok=$indx_prompt_ok n=$indx_tool_count"',
+                   stdin="6\n")
+    assert "ok=True n=6" in proc.stdout
+    proc, _ = _run(tmp_path, 'indx_tool_count_prompt\necho "ok=$indx_prompt_ok n=$indx_tool_count"',
+                   stdin="abc\n")
+    assert "ok=False n=3" in proc.stdout
+    proc, _ = _run(tmp_path, 'indx_tool_count_prompt\necho "ok=$indx_prompt_ok n=$indx_tool_count"',
+                   stdin="\n")
+    assert "ok=True n=3" in proc.stdout
+
+
+def test_utilities_extend_existing_install(tmp_path):
+    _run(tmp_path, 'installation_type="Bondtech INDX"\ncopy_unit_files')
+    proc, cfg = _run(tmp_path, 'indx_change_tool_count\necho "$unit_message"', stdin="6\n")
+    hw = (cfg / "AFC" / "AFC_Hardware.cfg").read_text()
+    assert "[AFC_extruder tool5]" in hw
+    assert "Restart Klipper" in proc.stdout
+
+
+def test_utilities_defaults_to_installed_count(tmp_path):
+    _run(tmp_path, 'indx_tool_count=5\ninstallation_type="Bondtech INDX"\ncopy_unit_files')
+    # Empty answer keeps the count read from the installed indx.cfg
+    proc, _ = _run(tmp_path, 'indx_change_tool_count\necho "n=$indx_tool_count"', stdin="\n")
+    assert "n=5" in proc.stdout
+
+
+def test_utilities_without_indx(tmp_path):
+    proc, _ = _run(tmp_path, 'indx_change_tool_count\necho "$unit_message"')
+    assert "No INDX install found" in proc.stdout

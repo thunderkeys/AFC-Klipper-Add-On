@@ -45,6 +45,9 @@ printf "\e[49m           \e[38;5;239;49m▄\e[38;5;101;49m▄\e[38;5;242;49m▄\
     echo ""
     printf "1. Remove AFC.var.unit file\n"
     printf "R. Rename existing unit\n"
+    if [ -f "${afc_config_dir}/indx/indx.cfg" ]; then
+      printf "T. Set INDX tool count\n"
+    fi
     echo ""
     printf "M. Return to Main Menu\n"
     printf "Q. Quit\n"
@@ -58,6 +61,8 @@ printf "\e[49m           \e[38;5;239;49m▄\e[38;5;101;49m▄\e[38;5;242;49m▄\
         del_var_file ;;
       R)
         rename_unit_prompt ;;
+      T)
+        indx_change_tool_count ;;
       M)
         main_menu ;;
       Q)
