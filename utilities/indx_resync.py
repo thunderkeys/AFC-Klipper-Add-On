@@ -226,11 +226,12 @@ def run_checks(macro_dir: Path, root: Path, markers_before: dict[str, int] | Non
                                      "is notified")
 
             for line in body:
-                code = line.split("#", 1)[0] if line.lstrip().startswith("#") else line
-                if not code.strip():
+                # Blank lines and comments can not call anything
+                if (not line.strip()
+                    or line.lstrip().startswith("#")):
                     continue
-                if (re.search(r"(?<![\w])CHANGE_TOOL\s+TOOL=", code)
-                    or re.search(r"^\s*CHANGE_TOOL\b", code)):
+                if (re.search(r"(?<![\w])CHANGE_TOOL\s+TOOL=", line)
+                    or re.search(r"^\s*CHANGE_TOOL\b", line)):
                     report.errors.append(f"{path.name}: [gcode_macro {name}] calls CHANGE_TOOL, "
                                          "use INDX_CHANGE_TOOL")
 
@@ -398,8 +399,11 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_accept(args.indx, args.ref, args.macro_dir, args.root)
     report = run_checks(args.macro_dir, args.root)
     print_report(report)
-    print("OK" if report.ok() else "FAILED")
-    return 0 if report.ok() else 1
+    if report.ok():
+        print("OK")
+        return 0
+    print("FAILED")
+    return 1
 
 
 if __name__ == "__main__":

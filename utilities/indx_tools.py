@@ -240,25 +240,38 @@ def update_indx(text: str, count: int) -> Tuple[str, List[str]]:
     insert: List[str] = []
     known = dict(positions)
     for idx in range(count):
-        if (idx in known
-            and "x" in known[idx]
-            and "dock_y" in known[idx]):
+        have = known.get(idx, {})
+        if ("x" in have
+            and "dock_y" in have):
             continue
         prev = [i for i in sorted(known)
                 if (i < idx
                     and "x" in known[i])]
+        lowest_dock_y = known[min(known)].get("dock_y", 0.0)
         if len(prev) >= 2:
             spacing = known[prev[-1]]["x"] - known[prev[-2]]["x"]
         else:
             spacing = DEFAULT_DOCK_SPACING
-        base = known[prev[-1]] if prev else {"x": 0.0, "dock_y": known[min(known)]["dock_y"]}
-        x = base["x"] + (spacing if prev else 0.0)
-        dock_y = base.get("dock_y", known[min(known)].get("dock_y", 0.0))
-        known[idx] = {"x": x, "dock_y": dock_y}
-        insert += ["#\n",
-                   f"variable_t{idx}_x:      {x:.2f}   # placeholder, measure with "
-                   f"CALIBRATE_DOCK_X TOOL={idx}\n",
-                   f"variable_t{idx}_dock_y: {dock_y:g}   # placeholder, see Finding dock_y\n"]
+        if prev:
+            # Continue the spacing of the docks below this one
+            x = known[prev[-1]]["x"] + spacing
+            dock_y = known[prev[-1]].get("dock_y", lowest_dock_y)
+        else:
+            # No dock below this one: start at 0 with the depth of the lowest known dock
+            x = 0.0
+            dock_y = lowest_dock_y
+        # Only add what is missing, klipper refuses an option set twice in one section
+        insert.append("#\n")
+        entry = dict(have)
+        if "x" not in have:
+            entry["x"] = x
+            insert.append(f"variable_t{idx}_x:      {x:.2f}   # placeholder, measure with "
+                          f"CALIBRATE_DOCK_X TOOL={idx}\n")
+        if "dock_y" not in have:
+            entry["dock_y"] = dock_y
+            insert.append(f"variable_t{idx}_dock_y: {dock_y:g}   # placeholder, see Finding "
+                          "dock_y\n")
+        known[idx] = entry
         added_docks.append(idx)
     if insert:
         lines[last_pos_line + 1:last_pos_line + 1] = insert

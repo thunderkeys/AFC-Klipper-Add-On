@@ -222,6 +222,15 @@ class TestUpdateIndx:
         assert "variable_t0_x:      0.00   # placeholder" in text
         assert "variable_t0_dock_y: -30   # placeholder" in text
 
+    def test_placeholder_dock_y_from_lowest_when_lower_dock_has_none(self):
+        """t0 has only x: t1 continues from it (5 + 45) and, with no dock_y anywhere,
+        falls back to 0."""
+        cfg = INDX.format(count=1, calibrated="False", positions="variable_t0_x: 5\n",
+                          wrappers="")
+        text, _ = tools.update_indx(cfg, 2)
+        assert "variable_t1_x:      50.00   # placeholder" in text
+        assert "variable_t1_dock_y: 0   # placeholder" in text
+
     def test_adding_dock_clears_calibration(self):
         text, changes = tools.update_indx(
             _indx_cfg(1, {0: (0, -26)}, (0,), calibrated="True"), 2)
@@ -238,12 +247,23 @@ class TestUpdateIndx:
         assert "variable_docks_calibrated: True\n" in text
         assert changes == ["tool_count 1 -> 2", "added [gcode_macro T(n)] wrappers for T1"]
 
-    def test_partial_dock_pair_gets_placeholder(self):
-        """A dock with only x set counts as missing."""
+    def test_dock_with_only_x_gets_dock_y_only(self):
+        """The existing t1_x is kept and not written twice."""
         cfg = _indx_cfg(1, {0: (0, -26)}, (0,)).replace(
             "gcode:\n", "variable_t1_x: 40\ngcode:\n")
         text, changes = tools.update_indx(cfg, 2)
         assert "added placeholder dock positions for T1" in changes
+        assert len(re.findall(r"^variable_t1_x:", text, re.M)) == 1
+        assert "variable_t1_x: 40\n" in text
+        assert "variable_t1_dock_y: -26   # placeholder" in text
+
+    def test_dock_with_only_dock_y_gets_x_only(self):
+        """t1 has dock_y -30 only: x is placeholdered from t0 (10 + 45), dock_y kept."""
+        cfg = _indx_cfg(1, {0: (10, -26)}, (0,)).replace(
+            "gcode:\n", "variable_t1_dock_y: -30\ngcode:\n")
+        text, _ = tools.update_indx(cfg, 2)
+        assert len(re.findall(r"^variable_t1_dock_y:", text, re.M)) == 1
+        assert "variable_t1_x:      55.00   # placeholder" in text
 
     def test_wrapper_appended_without_trailing_newline(self):
         cfg = _indx_cfg(1, {0: (0, -26)}, (0,)).rstrip("\n")
