@@ -19,7 +19,8 @@ Usage:
 
 `merge` leaves conflict markers in place and exits 1 when a file does not merge cleanly. Fix
 the conflicts, then run `accept` with the same ref to run the checks and record the new base.
-The manual process is described in docs/INDX_macro_resync.md.
+The manual process is described in
+https://www.afcproject.dev/toolchanger/indx_macro_resync.html.
 """
 
 from __future__ import annotations
@@ -90,7 +91,8 @@ def write_upstream_record(macro_dir: Path, repo: str, commit: str) -> None:
     :param commit: Upstream commit hash the .upstream copy was taken from
     """
     text = ("# Upstream INDX macros the files in this directory were vendored from.\n"
-            "# Managed by utilities/indx_resync.py, see docs/INDX_macro_resync.md.\n"
+            "# Managed by utilities/indx_resync.py, see\n"
+            "# https://www.afcproject.dev/toolchanger/indx_macro_resync.html\n"
             f"repo: {repo}\n"
             f"commit: {commit}\n"
             f"path: {UPSTREAM_SUBDIR}\n")

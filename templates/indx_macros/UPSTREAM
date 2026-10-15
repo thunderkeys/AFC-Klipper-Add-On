@@ -1,5 +1,6 @@
 # Upstream INDX macros the files in this directory were vendored from.
-# Managed by utilities/indx_resync.py, see docs/INDX_macro_resync.md.
+# Managed by utilities/indx_resync.py, see
+# https://www.afcproject.dev/toolchanger/indx_macro_resync.html
 repo: https://github.com/BondtechAB/INDX
 commit: 45b2902fac9e9f5a5c900497fb01324b2c56b3c9
 path: macros

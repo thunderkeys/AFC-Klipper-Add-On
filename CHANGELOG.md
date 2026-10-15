@@ -9,14 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Bondtech INDX toolchanger support. `[AFC_Toolchanger]` takes a new `backend` option (`ktc` default,
   or `indx`), and `[AFC_extruder]` takes `tool_index`. INDX tools share the Smart Head `extruder`
-  and are keyed by their AFC_extruder name. See `docs/INDX.md`.
+  and are keyed by their AFC_extruder name. See
+  https://www.afcproject.dev/toolchanger/indx.html.
 - `[AFC_Toolchanger]` with `backend: indx` takes `indx_change_macro`, `indx_park_macro` and
   `indx_positions_macro` for setups that renamed the INDX macros.
 - The INDX Klipper macros are vendored in `templates/indx_macros` with AFC patches. The installer
   offers a "Bondtech INDX" installation type, and updates refresh the INDX macros while keeping the
-  user's `indx.cfg`.
+  user's `indx.cfg` and report settings missing from it.
 - `utilities/indx_resync.py` merges upstream INDX macro changes into the vendored copy. See
-  `docs/INDX_macro_resync.md`.
+  https://www.afcproject.dev/toolchanger/indx_macro_resync.html.
 - `utilities/indx_tools.py set-count <n>` sets the number of INDX tools (AFC_extruder sections,
   `tool_count`, dock position placeholders and T(n) wrappers). The installer asks for the tool count
   and offers it in the utilities menu for existing installs.

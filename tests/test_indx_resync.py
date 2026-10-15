@@ -153,7 +153,8 @@ class TestWriteUpstreamRecord:
         resync.write_upstream_record(tmp_path, "https://x/y", "abc123")
         assert (tmp_path / "UPSTREAM").read_text() == (
             "# Upstream INDX macros the files in this directory were vendored from.\n"
-            "# Managed by utilities/indx_resync.py, see docs/INDX_macro_resync.md.\n"
+            "# Managed by utilities/indx_resync.py, see\n"
+            "# https://www.afcproject.dev/toolchanger/indx_macro_resync.html\n"
             "repo: https://x/y\n"
             "commit: abc123\n"
             "path: macros\n")
