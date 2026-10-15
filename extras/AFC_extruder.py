@@ -500,7 +500,7 @@ class AFCExtruder:
                 )
                 raise error(error_msg)
 
-    def handle_connect(self):
+    def handle_connect(self) -> None:
         """
         Handle the connection event.
         This function is called when the printer connects. It looks up AFC info
@@ -1246,7 +1246,13 @@ class AFCExtruder:
         if not success:
             raise gcmd.error(error_string)
 
-    def get_status(self, eventtime=None):
+    def get_status(self, eventtime: Optional[float]=None) -> Dict[str, Any]:
+        """
+        Klipper status for this extruder/tool.
+
+        :param eventtime: Klipper event time, unused
+        :return dict: Status values
+        """
         self.response: Dict[str, Any] = {}
         self.response['tool_stn'] = self.tool_stn
         self.response['tool_stn_unload'] = self.tool_stn_unload

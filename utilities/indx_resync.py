@@ -50,10 +50,16 @@ REGISTER_RE = re.compile(
 
 @dataclass
 class Report:
+    """
+    Result of the post merge checks: errors fail the resync, notes are informational.
+    """
     errors: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def ok(self) -> bool:
+        """
+        :return bool: True if no check failed
+        """
         return not self.errors
 
 
@@ -68,7 +74,8 @@ def read_upstream_record(macro_dir: Path) -> dict[str, str]:
     path = macro_dir / "UPSTREAM"
     if path.exists():
         for line in path.read_text().splitlines():
-            if ":" in line and not line.startswith("#"):
+            if (":" in line
+                and not line.startswith("#")):
                 key, value = line.split(":", 1)
                 record[key.strip()] = value.strip()
     return record
@@ -139,7 +146,9 @@ def afc_command_names(root: Path) -> set[str]:
     for path in (root / "config").rglob("*.cfg"):
         for line in path.read_text().splitlines():
             match = SECTION_RE.match(line)
-            if match and match.group(1) == "gcode_macro" and match.group(2):
+            if (match
+                and match.group(1) == "gcode_macro"
+                and match.group(2)):
                 names.add(match.group(2).strip().upper())
     return names
 
@@ -157,7 +166,8 @@ def macro_sections(text: str) -> list[tuple[str, list[str]]]:
         match = SECTION_RE.match(line)
         if match:
             current = None
-            if match.group(1) == "gcode_macro" and match.group(2):
+            if (match.group(1) == "gcode_macro"
+                and match.group(2)):
                 current = []
                 sections.append((match.group(2).strip(), current))
             continue
@@ -250,6 +260,11 @@ def run_checks(macro_dir: Path, root: Path, markers_before: dict[str, int] | Non
 
 
 def print_report(report: Report) -> None:
+    """
+    Prints notes and errors.
+
+    :param report: Check results
+    """
     for note in report.notes:
         print(f"NOTE  {note}")
     for err in report.errors:
@@ -277,6 +292,10 @@ def cmd_merge(indx: Path, ref: str, macro_dir: Path, root: Path) -> int:
     """
     3-way merges upstream `ref` into the vendored macros.
 
+    :param indx: INDX checkout
+    :param ref: Upstream ref to merge
+    :param macro_dir: Vendored macro directory
+    :param root: AFC repo root
     :return int: Exit code
     """
     base_dir = macro_dir / ".upstream"
@@ -304,7 +323,8 @@ def cmd_merge(indx: Path, ref: str, macro_dir: Path, root: Path) -> int:
                 ["git", "merge-file", "-L", "AFC", "-L", "base", "-L", f"upstream {ref}",
                  str(macro_dir / name), str(base_dir / name), str(new_dir / name)],
                 capture_output=True, text=True)
-            if result.returncode < 0 or result.returncode > 127:
+            if (result.returncode < 0
+                or result.returncode > 127):
                 print(f"ERROR {name}: git merge-file failed: {result.stderr.strip()}")
                 return 2
             if result.returncode:
@@ -315,7 +335,8 @@ def cmd_merge(indx: Path, ref: str, macro_dir: Path, root: Path) -> int:
 
         report = run_checks(macro_dir, root, markers_before, base_dir, new_dir)
         print_report(report)
-        if conflicts or not report.ok():
+        if (conflicts
+            or not report.ok()):
             print(f"\nResync to {commit[:12]} incomplete. Fix the above, then run:\n"
                   f"  utilities/indx_resync.py accept {indx} {ref}")
             return 1
@@ -329,6 +350,10 @@ def cmd_accept(indx: Path, ref: str, macro_dir: Path, root: Path) -> int:
     """
     Records `ref` as the new base after conflicts were resolved by hand.
 
+    :param indx: INDX checkout
+    :param ref: Upstream ref that was merged
+    :param macro_dir: Vendored macro directory
+    :param root: AFC repo root
     :return int: Exit code
     """
     record = read_upstream_record(macro_dir)
@@ -347,6 +372,12 @@ def cmd_accept(indx: Path, ref: str, macro_dir: Path, root: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """
+    Command line entry point.
+
+    :param argv: Arguments, defaults to sys.argv
+    :return int: Exit code
+    """
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--macro-dir", type=Path, default=MACRO_DIR, help=argparse.SUPPRESS)

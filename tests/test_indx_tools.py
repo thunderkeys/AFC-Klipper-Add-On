@@ -35,8 +35,9 @@ def _indx(d):
 def _sections(text, prefix):
     import re
     return [line.strip() for line in text.splitlines()
-            if line.startswith(f"[{prefix}") and (prefix != "gcode_macro T"
-                                                    or re.match(r"^\[gcode_macro T\d+\]", line))]
+            if (line.startswith(f"[{prefix}")
+                and (prefix != "gcode_macro T"
+                     or re.match(r"^\[gcode_macro T\d+\]", line)))]
 
 
 def test_extend_to_six(afc_dir):
@@ -58,7 +59,8 @@ def test_idempotent(afc_dir):
     tools.set_count(afc_dir, 6)
     hw, indx = _hw(afc_dir), _indx(afc_dir)
     assert tools.set_count(afc_dir, 6) == []
-    assert _hw(afc_dir) == hw and _indx(afc_dir) == indx
+    assert _hw(afc_dir) == hw
+    assert _indx(afc_dir) == indx
 
 
 def test_new_tools_copy_existing_tool_settings(afc_dir):

@@ -1461,7 +1461,7 @@ class AFCLane:
     def sync_print_time(self):
         return
 
-    def sync_to_extruder(self, update_current=True):
+    def sync_to_extruder(self, update_current: bool=True) -> None:
         """
         Helper function to sync lane to extruder and set print current if specified.
 

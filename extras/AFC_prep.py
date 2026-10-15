@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from extras.AFC import afc
     from extras.AFC_lane import AFCLane
+    from gcode import GCodeCommand
 
 if TYPE_CHECKING:
     from extras.AFC import afc
@@ -94,7 +95,13 @@ class afcPrep:
                                 break
                     self.logger.info("Done capturing TD-1 data")
 
-    def PREP(self, gcmd):
+    def PREP(self, gcmd: GCodeCommand) -> None:
+        """
+        Startup routine: loads saved lane/tool state, checks every unit and lane, assigns T(n)
+        maps and activates the extruder of the tool on the shuttle.
+
+        :param gcmd: G-code command that triggered PREP
+        """
         overrall_status = True
         while self.printer.state_message != 'Printer is ready':
             self.afc.reactor.pause(self.afc.reactor.monotonic() + 1)

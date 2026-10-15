@@ -178,9 +178,8 @@ gcode:
 
 """, "")
     _commit(indx, "indx-tc-macros.cfg", upstream)
-    (macro_dir / "indx-tc-macros.cfg").write_text(PATCHED_TC.replace("""    # AFC-PATCH: unsync lanes
-    AFC_INDX_PRE_LATCH
-""", ""))
+    latch_patch = "    # AFC-PATCH: unsync lanes\n    AFC_INDX_PRE_LATCH\n"
+    (macro_dir / "indx-tc-macros.cfg").write_text(PATCHED_TC.replace(latch_patch, ""))
     (macro_dir / ".upstream" / "indx-tc-macros.cfg").write_text(BASE_TC)
     markers = {"indx-tc-macros.cfg": 3, "indx.cfg": 0}
     report = resync.run_checks(macro_dir, env[1], markers)

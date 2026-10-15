@@ -235,7 +235,8 @@ class IndxBackend(ToolchangerBackend):
         :return AFCLane|None: Lane for the tool, None if there is none
         """
         lane_name = tool.lane_loaded
-        if lane_name is None and tool.tc_lane is not None:
+        if (lane_name is None
+            and tool.tc_lane is not None):
             lane_name = tool.tc_lane.name
         if lane_name is None:
             return None

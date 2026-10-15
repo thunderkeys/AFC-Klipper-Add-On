@@ -1628,7 +1628,8 @@ class afc:
             # and increase load error count
             self.afc_stats.increase_load_error_count(self)
 
-    def TOOL_LOAD(self, cur_lane: AFCLane, purge_length: Optional[float]=None, set_start_time=False):
+    def TOOL_LOAD(self, cur_lane: AFCLane, purge_length: Optional[float]=None,
+                  set_start_time: bool=False) -> bool:
         """
         This function handles the loading of a specified lane into the tool. It performs
         several checks and movements to ensure the lane is properly loaded.
@@ -2049,7 +2050,8 @@ class afc:
         # User manually unloaded spool from toolhead, remove spool from active status
         self.spool.set_active_spool(None)
 
-    def TOOL_UNLOAD(self, cur_lane: AFCLane, set_start_time=True, force_unload=False):
+    def TOOL_UNLOAD(self, cur_lane: AFCLane, set_start_time: bool=True,
+                    force_unload: bool=False) -> bool:
         """
         This function handles the unloading of a specified lane from the tool. It performs
         several checks and movements to ensure the lane is properly unloaded.
@@ -2579,7 +2581,17 @@ class afc:
         else:
             self.error.AFC_error(f"Error trying to lookup lane for {Tcmd}")
 
-    def CHANGE_TOOL(self, cur_lane: AFCLane, purge_length: Optional[float]=None, restore_pos: bool=True, new_extruder_temp: Optional[float]=None) -> None:
+    def CHANGE_TOOL(self, cur_lane: AFCLane, purge_length: Optional[float]=None,
+                    restore_pos: bool=True, new_extruder_temp: Optional[float]=None) -> None:
+        """
+        Changes to the given lane: swaps tools when the lane is on another tool, unloads the
+        current lane and loads the new one, handling temperatures for the incoming tool.
+
+        :param cur_lane: Lane to change to
+        :param purge_length: Amount of filament to poop after loading (optional)
+        :param restore_pos: Set True to restore the toolhead position after the change
+        :param new_extruder_temp: Temperature for the incoming tool (optional)
+        """
         try:
             self.afcDeltaTime.set_start_time()
             # Check if the bypass filament sensor detects filament; if so, abort the tool change.
@@ -2951,7 +2963,8 @@ class afc:
 
         shared_backend = self.function.get_shared_backend()
         if (shared_backend is not None
-            and (t_tool is None or t_tool.shared_extruder)):
+            and (t_tool is None
+                 or t_tool.shared_extruder)):
             filtered = shared_backend.filter_heat(t_tool, temp, "M109" if wait else "M104")
             if filtered is None:
                 return
