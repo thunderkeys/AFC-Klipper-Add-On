@@ -1467,7 +1467,7 @@ class AFCLane:
 
         :param update_current: Sets current to specified print current when True
         """
-        # Shared extruder tools (INDX) only drive filament while on the head
+        # Hotend changer tools only drive filament while on the head
         if (self.extruder_obj.shared_extruder
             and not self.extruder_obj.on_shuttle()):
             return

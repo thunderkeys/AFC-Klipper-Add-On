@@ -22,9 +22,11 @@ class ToolchangerBackend:
     """
     Base class for toolchanger backends.
 
-    `shared_extruder` is True when every tool drives the same klipper extruder (INDX), so tool
-    identity cannot be derived from the active klipper extruder. `heats_on_pickup` is True when
-    the incoming tool cannot be preheated and the outgoing tool cannot stay hot.
+    `shared_extruder` is True for hotend changers (e.g. INDX): toolchangers that swap only the
+    hotend while the extruder and heater stay on the head, so every tool drives the same klipper
+    extruder and tool identity cannot be derived from the active klipper extruder.
+    `heats_on_pickup` is True when the incoming tool cannot be preheated and the outgoing tool
+    cannot stay hot.
     """
     name: str = "base"
     shared_extruder: bool = False

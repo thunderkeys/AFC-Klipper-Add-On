@@ -512,8 +512,8 @@ class afcFunction:
     def get_current_extruder(self) -> Optional[str]:
         """
         Helper function to lookup the afc.tools key of the tool on the active toolhead. This is
-        the klipper extruder name, except for shared extruder toolchangers (INDX) where it is
-        the AFC_extruder name of the tool on the head.
+        the klipper extruder name, except for hotend changers (e.g. INDX) where it is the
+        AFC_extruder name of the tool on the head.
 
         :return string: Key of current extruder/tool, None if no extruder/tool
         """
@@ -522,7 +522,7 @@ class afcFunction:
         if tool_obj:
             return current_extruder if tool_obj.on_shuttle() else None
 
-        # Shared extruder tools are keyed by AFC_extruder name, ask the backend instead
+        # Hotend changer tools are keyed by AFC_extruder name, ask the backend instead
         for tool in self.afc.tools.values():
             if (tool.th_extruder_name == current_extruder
                 and tool.shared_extruder
@@ -533,9 +533,9 @@ class afcFunction:
 
     def get_shared_backend(self) -> Optional[ToolchangerBackend]:
         """
-        Backend of the shared extruder toolchanger (INDX), if one is configured.
+        Backend of the hotend changer (shared extruder toolchanger), if one is configured.
 
-        :return ToolchangerBackend|None: Shared extruder backend, None if not configured
+        :return ToolchangerBackend|None: Hotend changer backend, None if not configured
         """
         for tool in self.afc.tools.values():
             if (tool.shared_extruder

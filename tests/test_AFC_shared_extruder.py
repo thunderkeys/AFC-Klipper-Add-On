@@ -1,5 +1,5 @@
 # Unit tests for shared extruder tool identity (multiple AFC_extruder sections on one klipper
-# extruder, used by INDX).
+# extruder, used by hotend changers such as INDX).
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ class TestRegisterTool:
         t0 = _make_shared_tool("T0", _shared_unit())
         t1 = _make_shared_tool("T1", _shared_unit(), afc=t0.afc)
         t0._register_tool()
-        with pytest.raises(KlipperError, match="Only tools in the same shared extruder"):
+        with pytest.raises(KlipperError, match="Only tools in the same hotend changer"):
             t1._register_tool()
 
     def test_regular_tool_on_shared_extruder_rejected(self):
@@ -69,14 +69,14 @@ class TestRegisterTool:
         regular = _make_afc_extruder("extruder")
         regular.afc = t0.afc
         t0._register_tool()
-        with pytest.raises(KlipperError, match="Only tools in the same shared extruder"):
+        with pytest.raises(KlipperError, match="Only tools in the same hotend changer"):
             regular._register_tool()
 
     def test_shared_tool_after_regular_tool_rejected(self):
         regular = _make_afc_extruder("extruder")
         t0 = _make_shared_tool("T0", _shared_unit(), afc=regular.afc)
         regular._register_tool()
-        with pytest.raises(KlipperError, match="Only tools in the same shared extruder"):
+        with pytest.raises(KlipperError, match="Only tools in the same hotend changer"):
             t0._register_tool()
 
     def test_handle_connect_looks_up_unit_before_registering(self):

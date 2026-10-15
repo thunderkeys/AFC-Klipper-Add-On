@@ -272,7 +272,7 @@ class AFCExtruder:
         self.tc_unit_obj: Optional[AfcToolchanger|None] = None
         self.tc_lane: Optional[AFCLane|None]            = None
         self.tool: Optional[str]        = config.get('tool', None)
-        # Physical tool number, required for shared extruder toolchangers (INDX)
+        # Physical tool number, required for hotend changers (e.g. INDX)
         self.tool_index: Optional[int]  = config.getint('tool_index', None, minval=0)
         self.tool_obj                   = None
         self.map: list                  = config.getlist('map', [])
@@ -393,7 +393,7 @@ class AFCExtruder:
     @property
     def shared_extruder(self) -> bool:
         """
-        True when this tool shares its klipper extruder with other tools (INDX).
+        True when this tool shares its klipper extruder with other tools (hotend changers).
 
         :return bool: True if attached toolchanger backend uses a shared extruder
         """
@@ -403,7 +403,7 @@ class AFCExtruder:
     @property
     def heats_on_pickup(self) -> bool:
         """
-        True when the toolchanger heats this tool only once it is on the head (INDX).
+        True when the toolchanger heats this tool only once it is on the head (hotend changers).
 
         :return bool: True if attached toolchanger backend heats on pickup
         """
@@ -441,8 +441,8 @@ class AFCExtruder:
                 and (other.tc_unit_obj is not self.tc_unit_obj
                      or not self.shared_extruder)):
                 error_str = (f"[{other.fullname}] and [{self.fullname}] both map to "
-                             f"'{self.th_extruder_name}'. Only tools in the same shared extruder "
-                             "toolchanger unit (backend: indx) can share a toolhead extruder.")
+                             f"'{self.th_extruder_name}'. Only tools in the same hotend changer "
+                             "unit (e.g. backend: indx) can share a toolhead extruder.")
                 raise error(error_str)
 
         self.afc.tools[key] = self

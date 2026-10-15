@@ -2593,8 +2593,8 @@ class afc:
                 (infinite_runout and self.function.get_current_extruder() != next_extruder)
 
             if cur_lane.extruder_obj.heats_on_pickup:
-                # Shared heater (INDX): the toolchanger heats the incoming tool after pickup, so
-                # there is nothing to preheat or cool down here.
+                # Hotend changer: the heater stays on the head and heats the incoming hotend
+                # after pickup, so there is nothing to preheat or cool down here.
                 self.next_tool_temp = new_extruder_temp
                 if (adjusting_temperature
                     and infinite_runout):
@@ -2895,7 +2895,7 @@ class afc:
         snapmaker_param_a: int = gcmd.get_int('A', None)
 
         curr_extruder = self.function.get_current_extruder_obj()
-        # Tool targeted by T, used to apply shared heater (INDX) rules below
+        # Tool targeted by T, used to apply hotend changer heating rules below
         t_tool: Optional[AFCExtruder] = None
 
         if toolnum is not None:
