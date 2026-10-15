@@ -47,20 +47,22 @@ def _make_tool(unit, name, index, afc):
     return tool
 
 
-def _make_unit():
+def _make_unit(values=None):
     """Real AfcIndx built through its __init__."""
-    return AfcIndx(_make_config_for_init(values={"backend": "indx"}))
+    return AfcIndx(_make_config_for_init(values={"backend": "indx", **(values or {})}))
 
 
-def _make_indx(tool_count=3, n_tools=3, active=-1, macros=True, ready=True):
-    """Real AfcIndx with INDX objects registered with the printer."""
-    unit = _make_unit()
+def _make_indx(tool_count=3, n_tools=3, active=-1, macros=True, ready=True, values=None,
+               positions="TOOL_POSITIONS"):
+    """Real AfcIndx with INDX objects registered with the printer. `values` adds
+    AFC_Toolchanger options, `positions` names the tool positions macro."""
+    unit = _make_unit(values)
     afc = unit.afc
     printer = unit.printer
     save_vars = FakeSaveVariables(active)
     printer._objects["save_variables"] = save_vars
-    printer._objects["gcode_macro TOOL_POSITIONS"] = FakeMacro(tool_count=tool_count,
-                                                               no_heat_tools=[])
+    printer._objects[f"gcode_macro {positions}"] = FakeMacro(tool_count=tool_count,
+                                                             no_heat_tools=[])
     tools = [_make_tool(unit, f"T{i}", i, afc) for i in range(n_tools)]
     if macros:
         for i in range(n_tools):
@@ -106,6 +108,20 @@ class TestAfcIndxInit:
         assert unit.positions_macro is None
         assert unit.afc_change_active is False
 
+    def test_macro_names_default(self):
+        unit = _make_unit()
+        assert unit.positions_macro_name == "TOOL_POSITIONS"
+        assert unit.change_macro == "INDX_CHANGE_TOOL"
+        assert unit.park_macro == "PARK_TOOL"
+
+    def test_macro_names_from_config(self):
+        unit = _make_unit({"indx_positions_macro": "MY_POSITIONS",
+                           "indx_change_macro": "MY_CHANGE",
+                           "indx_park_macro": "MY_PARK"})
+        assert unit.positions_macro_name == "MY_POSITIONS"
+        assert unit.change_macro == "MY_CHANGE"
+        assert unit.park_macro == "MY_PARK"
+
     def test_registers_hook_commands(self):
         unit = _make_unit()
         commands = unit.afc.gcode._commands
@@ -142,6 +158,11 @@ class TestAfcIndxHandleReady:
         unit.handle_ready()
         assert list(unit.lanes) == ["lane2", "lane10"]
 
+    def test_resolves_renamed_positions_macro(self):
+        unit, _, _ = _make_indx(values={"indx_positions_macro": "MY_POSITIONS"},
+                                positions="MY_POSITIONS")
+        assert unit.positions_macro is _macro(unit, "MY_POSITIONS")
+
     def test_updates_tool_macros(self):
         unit, _, _ = _make_indx(active=1, ready=False)
         unit.handle_ready()
@@ -164,7 +185,19 @@ class TestAfcIndxHandleReady:
             unit.handle_ready()
         assert str(exc.value) == ("[AFC_Toolchanger my_tc] backend: indx requires the INDX "
                                   "macros. [gcode_macro TOOL_POSITIONS] was not found, make "
-                                  "sure the AFC INDX macro files are included in your config.")
+                                  "sure the AFC INDX macro files are included in your config, "
+                                  "or set indx_positions_macro if it was renamed.")
+
+    def test_renamed_positions_macro_missing(self):
+        """Default named macro present but the configured name is not."""
+        unit, _, _ = _make_indx(values={"indx_positions_macro": "MY_POSITIONS"},
+                                ready=False)
+        with pytest.raises(KlipperError) as exc:
+            unit.handle_ready()
+        assert str(exc.value) == ("[AFC_Toolchanger my_tc] backend: indx requires the INDX "
+                                  "macros. [gcode_macro MY_POSITIONS] was not found, make "
+                                  "sure the AFC INDX macro files are included in your config, "
+                                  "or set indx_positions_macro if it was renamed.")
 
     def test_missing_tool_index(self):
         unit, _, tools = _make_indx(ready=False)
@@ -375,6 +408,13 @@ class TestAfcIndxSelect:
         _run_sets_active(unit, save_vars, result=-1)
         assert unit.select_tool(tools[1]) is False
 
+    def test_renamed_change_macro(self):
+        unit, save_vars, tools = _make_indx(values={"indx_change_macro": "MY_CHANGE"})
+        save_vars.allVariables["active_tool"] = 1
+        assert unit.select_tool(tools[1], 215) is True
+        unit.afc.gcode.run_script_from_command.assert_called_once_with(
+            "MY_CHANGE TOOL=1 TEMP=215.0")
+
 
 # ── unselect ─────────────────────────────────────────────────────────────────
 
@@ -384,6 +424,11 @@ class TestAfcIndxUnselect:
         _run_sets_active(unit, save_vars)
         assert unit.unselect_tool(tools[1]) is True
         unit.afc.gcode.run_script_from_command.assert_called_once_with("PARK_TOOL")
+
+    def test_renamed_park_macro(self):
+        unit, _, tools = _make_indx(values={"indx_park_macro": "MY_PARK"})
+        assert unit.unselect_tool(tools[1]) is True
+        unit.afc.gcode.run_script_from_command.assert_called_once_with("MY_PARK")
 
     def test_failure_result_returned(self):
         unit, save_vars, tools = _make_indx(active=1)

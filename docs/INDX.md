@@ -32,6 +32,9 @@ Then configure the Smart Head in `printer.cfg` (`[mcu indxmcu]`, `[indx]`, `[ext
 ```ini
 [AFC_Toolchanger INDX]
 backend: indx               # ktc (default) or indx
+#indx_change_macro: INDX_CHANGE_TOOL   # macro AFC runs to pick up a tool (TOOL=<n> TEMP=<t>)
+#indx_park_macro: PARK_TOOL            # macro AFC runs to park the tool on the head
+#indx_positions_macro: TOOL_POSITIONS  # macro holding tool_count and no_heat_tools
 
 [AFC_extruder tool0]
 extruder_name: extruder     # every INDX tool uses the Smart Head extruder
@@ -77,7 +80,9 @@ has a unique `tool_index` below `tool_count`, and that all tools use the same ex
   wrappers in `indx.cfg` exist so Mainsail and Fluidd show tool buttons. AFC sets their `active`
   variable for the tool on the head.
 - **Tool changes.** AFC runs `INDX_CHANGE_TOOL TOOL=<n> TEMP=<t>` (the INDX `CHANGE_TOOL`, renamed
-  because AFC owns `CHANGE_TOOL`) and `PARK_TOOL`, then checks `active_tool`. A failed pickup or
+  because AFC owns `CHANGE_TOOL`) and `PARK_TOOL`, then checks `active_tool`. If you renamed
+  these macros, point AFC at them with `indx_change_macro`, `indx_park_macro` and
+  `indx_positions_macro`. A failed pickup or
   park stops AFC with the INDX error.
 - **Heating.** There is one heater, so AFC never preheats the next tool or cools the last one.
   The incoming tool's temperature is passed to INDX as `TEMP=`. AFC's `M104`/`M109` apply the

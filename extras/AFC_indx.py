@@ -21,9 +21,11 @@ if TYPE_CHECKING:
     from extras.AFC_extruder import AFCExtruder
     from extras.AFC_lane import AFCLane
 
-INDX_POSITIONS_MACRO = "gcode_macro TOOL_POSITIONS"
-INDX_CHANGE_CMD = "INDX_CHANGE_TOOL"
-INDX_PARK_CMD = "PARK_TOOL"
+# Default macro names, matching the vendored INDX macros. Each can be overridden in the
+# AFC_Toolchanger section for setups that renamed them.
+DEFAULT_POSITIONS_MACRO = "TOOL_POSITIONS"
+DEFAULT_CHANGE_MACRO = "INDX_CHANGE_TOOL"
+DEFAULT_PARK_MACRO = "PARK_TOOL"
 
 
 class AfcIndx(AfcToolchanger):
@@ -38,6 +40,13 @@ class AfcIndx(AfcToolchanger):
         :param config: AFC_Toolchanger config section
         """
         super().__init__(config)
+        # Macro holding tool_count and no_heat_tools
+        self.positions_macro_name: str = config.get("indx_positions_macro",
+                                                    DEFAULT_POSITIONS_MACRO)
+        # Macro that picks up a tool, called with TOOL=<n> [TEMP=<temp>]
+        self.change_macro: str = config.get("indx_change_macro", DEFAULT_CHANGE_MACRO)
+        # Macro that parks the tool on the head
+        self.park_macro: str = config.get("indx_park_macro", DEFAULT_PARK_MACRO)
         self.save_vars_obj: Any = None
         self.positions_macro: Any = None
         # Set while AFC is driving a change so the macro hook does not resync mid change
@@ -69,11 +78,13 @@ class AfcIndx(AfcToolchanger):
                          "INDX stores the tool on the head there.")
             raise error(error_str)
 
-        self.positions_macro = self.printer.lookup_object(INDX_POSITIONS_MACRO, None)
+        positions_section = f"gcode_macro {self.positions_macro_name}"
+        self.positions_macro = self.printer.lookup_object(positions_section, None)
         if self.positions_macro is None:
             error_str = (f"[{unit_name}] backend: indx requires the INDX macros. "
-                         f"[{INDX_POSITIONS_MACRO}] was not found, make sure the AFC INDX macro "
-                         "files are included in your config.")
+                         f"[{positions_section}] was not found, make sure the AFC INDX macro "
+                         "files are included in your config, or set indx_positions_macro if "
+                         "it was renamed.")
             raise error(error_str)
 
         tool_count = int(self.positions_macro.variables.get("tool_count", 0))
@@ -177,26 +188,26 @@ class AfcIndx(AfcToolchanger):
 
     def select_tool(self, extruder: AFCExtruder, target_temp: Optional[float]=None) -> bool:
         """
-        Picks up a tool with INDX_CHANGE_TOOL, heating it to target_temp after pickup.
+        Picks up a tool with the INDX change macro, heating it to target_temp after pickup.
 
         :param extruder: AFC_extruder to select
         :param target_temp: Temperature for the incoming tool, None to let INDX fall back to the
             current extruder target
         :return bool: True if INDX reports the tool on the head afterwards
         """
-        cmd = f"{INDX_CHANGE_CMD} TOOL={extruder.tool_index}"
+        cmd = f"{self.change_macro} TOOL={extruder.tool_index}"
         if target_temp is not None:
             cmd += f" TEMP={target_temp:.1f}"
         return self._run_change(cmd, extruder)
 
     def unselect_tool(self, extruder: Optional[AFCExtruder]) -> bool:
         """
-        Parks the tool on the head with PARK_TOOL.
+        Parks the tool on the head with the INDX park macro.
 
         :param extruder: AFC_extruder currently on the head, unused since INDX tracks it
         :return bool: True if INDX reports an empty head afterwards
         """
-        return self._run_change(INDX_PARK_CMD, None)
+        return self._run_change(self.park_macro, None)
 
     def _run_change(self, cmd: str, expected: Optional[AFCExtruder]) -> bool:
         """
