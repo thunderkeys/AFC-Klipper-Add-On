@@ -241,6 +241,41 @@ class TestAfcToolchangerInit:
         names = [c.args[1] for c in calls]
         assert "AFC_SET_TOOLHEAD_LED" in names
 
+    def test_backend_defaults_to_ktc(self):
+        from extras.AFC_toolchanger_backend import KtcBackend
+        tool = AfcToolchanger(_make_config_for_init())
+        assert type(tool.backend) is KtcBackend
+        assert tool.backend.unit is tool
+
+    def test_backend_indx(self):
+        from extras.AFC_indx import IndxBackend
+        tool = AfcToolchanger(_make_config_for_init(values={"backend": "indx"}))
+        assert type(tool.backend) is IndxBackend
+
+    def test_backend_name_case_insensitive(self):
+        from extras.AFC_indx import IndxBackend
+        tool = AfcToolchanger(_make_config_for_init(values={"backend": "INDX"}))
+        assert type(tool.backend) is IndxBackend
+
+    def test_invalid_backend_raises(self):
+        config = _make_config_for_init(values={"backend": "nope"})
+        with pytest.raises(configparser.Error) as exc:
+            AfcToolchanger(config)
+        assert str(exc.value) == ("[AFC_Toolchanger my_tc] invalid backend 'nope', "
+                                  "valid options: indx, ktc")
+
+
+# ── handle_ready ─────────────────────────────────────────────────────────────
+
+class TestAfcToolchangerHandleReady:
+    def test_sorts_lanes_and_readies_backend(self):
+        tool = _make_toolchanger()
+        tool.backend = MagicMock()
+        tool.lanes = {"lane10": "b", "lane2": "a"}
+        tool.handle_ready()
+        assert list(tool.lanes) == ["lane2", "lane10"]
+        tool.backend.handle_ready.assert_called_once_with()
+
 
 # ── load_config_prefix / load_config ────────────────────────────────────────
 
@@ -426,6 +461,25 @@ class TestCmdAFCUnselectTool:
         tool.cmd_AFC_UNSELECT_TOOL(gcmd)
 
         tool.afc.gcode.run_script_from_command.assert_called_once_with("UNSELECT_TOOL")
+
+    def test_failed_unselect_stops_with_extruder(self):
+        extruder = _make_extruder_obj()
+        tool = _make_toolchanger_for_unselect(current_extruder=extruder)
+        tool.backend = MagicMock()
+        tool.backend.unselect.return_value = False
+        tool.cmd_AFC_UNSELECT_TOOL(_build_gcmd())
+        assert tool.afc.current_state == State.IDLE
+        assert extruder.status == State.IDLE
+        tool.afc.function.handle_activate_extruder.assert_not_called()
+        tool.afc.spool.set_active_spool.assert_not_called()
+
+    def test_failed_unselect_stops_without_extruder(self):
+        tool = _make_toolchanger_for_unselect(current_extruder=None)
+        tool.backend = MagicMock()
+        tool.backend.unselect.return_value = False
+        tool.cmd_AFC_UNSELECT_TOOL(_build_gcmd())
+        assert tool.afc.current_state == State.IDLE
+        tool.afc.function.handle_activate_extruder.assert_not_called()
 
     def test_runs_default_unselect_when_no_current_extruder(self):
         """Covers the `current_extruder` falsy half of the combined condition."""
@@ -724,6 +778,53 @@ class TestToolSwap:
 
         lane.extruder_obj.estats.tool_selected.increase_count.assert_called_once()
 
+    def test_returns_true_on_success(self):
+        tool = _make_toolchanger_for_tool_swap()
+        tool.function.get_current_extruder_obj.return_value = None
+        lane = _make_lane_for_tool_swap()
+        assert tool.tool_swap(lane) is True
+
+    def test_target_temp_passed_to_backend(self):
+        tool = _make_toolchanger_for_tool_swap()
+        tool.function.get_current_extruder_obj.return_value = None
+        tool.backend = MagicMock()
+        lane = _make_lane_for_tool_swap()
+        tool.tool_swap(lane, target_temp=215.0)
+        tool.backend.select.assert_called_once_with(lane.extruder_obj, 215.0)
+
+    def _failed_swap(self, current_extruder):
+        tool = _make_toolchanger_for_tool_swap()
+        tool.function.get_current_extruder_obj.return_value = current_extruder
+        tool.backend = MagicMock()
+        tool.backend.select.return_value = False
+        tool.afc.last_gcode_position = [10.0, 20.0, 5.0, 100.0]
+        tool.afc.gcode_move.base_position = [1.0, 2.0, 3.0, 4.0]
+        tool.afc.base_position = "unchanged"
+        lane = _make_lane_for_tool_swap()
+        result = tool.tool_swap(lane)
+        return tool, lane, result
+
+    def test_failed_select_returns_false_and_stops(self):
+        tool, lane, result = self._failed_swap(None)
+        assert result is False
+        assert tool.afc.current_state == State.IDLE
+        assert lane.extruder_obj.status == State.IDLE
+        assert lane.extruder_obj.next_pickup is False
+        lane.activate_toolhead_extruder.assert_not_called()
+        lane.extruder_obj.estats.tool_selected.increase_count.assert_not_called()
+        assert tool.afc.base_position == "unchanged"
+
+    def test_failed_select_restores_saved_position(self):
+        """last_gcode_position had base_position subtracted before the swap, so a failed
+        swap adds it back: 10-1+1, 20-2+2, 5-3+3, and E untouched."""
+        tool, _, _ = self._failed_swap(None)
+        assert tool.afc.last_gcode_position == [10.0, 20.0, 5.0, 100.0]
+
+    def test_failed_select_idles_current_extruder(self):
+        current = _make_extruder_obj("extruder0")
+        tool, _, _ = self._failed_swap(current)
+        assert current.status == State.IDLE
+
     def test_position_bookkeeping_after_swap(self):
         """base_position/homing_position are copied (not aliased) from
         gcode_move, and last_gcode_position round-trips back to its original
@@ -883,4 +984,18 @@ class TestModuleImportGuard:
             _exec_afc_toolchanger_with_blocked_dependency("extras.AFC_lane")
         assert str(exc_info.value).startswith(
             "Error trying to import AFC_lane, please rerun install-afc.sh"
+        )
+
+    def test_toolchanger_backend_import_failure_raises_configparser_error(self):
+        with pytest.raises(configparser.Error) as exc_info:
+            _exec_afc_toolchanger_with_blocked_dependency("extras.AFC_toolchanger_backend")
+        assert str(exc_info.value).startswith(
+            "Error trying to import AFC_toolchanger_backend, please rerun install-afc.sh"
+        )
+
+    def test_indx_import_failure_raises_configparser_error(self):
+        with pytest.raises(configparser.Error) as exc_info:
+            _exec_afc_toolchanger_with_blocked_dependency("extras.AFC_indx")
+        assert str(exc_info.value).startswith(
+            "Error trying to import AFC_indx, please rerun install-afc.sh"
         )

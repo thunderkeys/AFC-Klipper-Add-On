@@ -45,7 +45,7 @@ ALLOWED_MACROS = re.compile(r"^T\d+$")
 
 SECTION_RE = re.compile(r"^\[(\w+)(?:\s+([^\]]+))?\]")
 REGISTER_RE = re.compile(
-    r"register_(?:mux_)?commands?\(\s*(?:[^,()]+,\s*)?['\"]([A-Z][A-Z0-9_]+)['\"]")
+    r"register_(?:mux_)?commands?\(\s*(?:[^,()'\"]+,\s*)?['\"]([A-Z][A-Z0-9_]+)['\"]")
 
 
 @dataclass

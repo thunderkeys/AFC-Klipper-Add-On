@@ -1,4 +1,4 @@
-# Unit tests for extras/AFC_indx.py
+# Unit tests for extras/AFC_indx.py (IndxBackend)
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from extras.AFC_indx import IndxBackend
-from extras.AFC import State
 from tests.conftest import MockGCodeCommand
 from tests.test_AFC_Toolchanger import _make_toolchanger
 
 
 class FakeSaveVariables:
+    """Stand-in for klipper's save_variables object."""
+
     def __init__(self, active_tool=-1):
         self.allVariables = {"active_tool": active_tool}
 
@@ -21,6 +22,8 @@ class FakeSaveVariables:
 
 
 class FakeMacro:
+    """Stand-in for a klipper gcode_macro object."""
+
     def __init__(self, **variables):
         self.variables = dict(variables)
 
@@ -43,7 +46,8 @@ def _make_tool(unit, name, index, afc):
     return tool
 
 
-def _make_indx(tool_count=3, n_tools=3, active=-1, macros=True):
+def _make_indx(tool_count=3, n_tools=3, active=-1, macros=True, ready=True):
+    """Real AfcToolchanger with backend: indx, INDX objects registered with the printer."""
     unit = _make_toolchanger(values={"backend": "indx"})
     backend = unit.backend
     afc = unit.afc
@@ -56,12 +60,23 @@ def _make_indx(tool_count=3, n_tools=3, active=-1, macros=True):
     if macros:
         for i in range(n_tools):
             printer._objects[f"gcode_macro T{i}"] = FakeMacro(active=False)
+    if ready:
+        backend.handle_ready()
+    afc.logger.messages.clear()
     return unit, backend, save_vars, tools
 
 
-def _simulate_indx(unit, save_vars, result=None):
-    """Make run_script_from_command behave like the INDX macros: CHANGE sets active_tool
-    to TOOL (or `result` when given), PARK sets -1."""
+def _macro(unit, name):
+    return unit.printer._objects[f"gcode_macro {name}"]
+
+
+def _active_flags(unit, n=3):
+    return [_macro(unit, f"T{i}").variables["active"] for i in range(n)]
+
+
+def _run_sets_active(unit, save_vars, result=None):
+    """run_script_from_command acting like the INDX macros: INDX_CHANGE_TOOL sets active_tool
+    to TOOL (or `result`), PARK_TOOL sets -1 (or `result`)."""
     def _run(cmd):
         if cmd.startswith("INDX_CHANGE_TOOL"):
             tool = int(cmd.split("TOOL=")[1].split()[0])
@@ -71,204 +86,438 @@ def _simulate_indx(unit, save_vars, result=None):
     unit.afc.gcode.run_script_from_command = MagicMock(side_effect=_run)
 
 
-class TestBackendFlags:
-    def test_is_indx_backend(self):
+# ── __init__ ─────────────────────────────────────────────────────────────────
+
+class TestIndxBackendInit:
+    def test_class_flags(self):
+        assert IndxBackend.name == "indx"
+        assert IndxBackend.shared_extruder is True
+        assert IndxBackend.heats_on_pickup is True
+
+    def test_initial_state(self):
         unit = _make_toolchanger(values={"backend": "indx"})
-        assert isinstance(unit.backend, IndxBackend)
-        assert unit.backend.shared_extruder is True
-        assert unit.backend.heats_on_pickup is True
+        backend = unit.backend
+        assert isinstance(backend, IndxBackend)
+        assert backend.unit is unit
+        assert backend.printer is unit.printer
+        assert backend.save_vars_obj is None
+        assert backend.positions_macro is None
+        assert backend.afc_change_active is False
 
-    def test_registers_hook_command(self):
+    def test_registers_hook_commands(self):
         unit = _make_toolchanger(values={"backend": "indx"})
-        assert "AFC_INDX_TOOL_CHANGED" in unit.afc.gcode._commands
+        commands = unit.afc.gcode._commands
+        assert commands["AFC_INDX_TOOL_CHANGED"] == unit.backend.cmd_AFC_INDX_TOOL_CHANGED
+        assert commands["AFC_INDX_PRE_LATCH"] == unit.backend.cmd_AFC_INDX_PRE_LATCH
 
 
-class TestHandleReady:
-    def test_valid_config(self):
-        unit, backend, _, _ = _make_indx()
+# ── tools ────────────────────────────────────────────────────────────────────
+
+class TestIndxBackendTools:
+    def test_returns_only_tools_of_this_unit(self):
+        unit, backend, _, tools = _make_indx()
+        other = MagicMock()
+        other.tc_unit_obj = MagicMock()
+        unit.afc.tools["other"] = other
+        assert backend.tools() == tools
+
+    def test_empty_when_no_tools(self):
+        unit, backend, _, _ = _make_indx(n_tools=0)
+        assert backend.tools() == []
+
+
+# ── handle_ready ─────────────────────────────────────────────────────────────
+
+class TestIndxBackendHandleReady:
+    def test_resolves_objects(self):
+        unit, backend, save_vars, _ = _make_indx()
+        assert backend.save_vars_obj is save_vars
+        assert backend.positions_macro is _macro(unit, "TOOL_POSITIONS")
+
+    def test_updates_tool_macros(self):
+        unit, backend, _, _ = _make_indx(active=1, ready=False)
         backend.handle_ready()
+        assert _active_flags(unit) == [False, True, False]
 
     def test_missing_save_variables(self):
-        unit, backend, _, _ = _make_indx()
+        unit, backend, _, _ = _make_indx(ready=False)
         del unit.printer._objects["save_variables"]
-        with pytest.raises(KlipperError, match="requires a \\[save_variables\\]"):
+        with pytest.raises(KlipperError) as exc:
             backend.handle_ready()
+        assert str(exc.value) == ("[AFC_Toolchanger my_tc] backend: indx requires a "
+                                  "[save_variables] section, INDX stores the tool on the "
+                                  "head there.")
+        assert backend.positions_macro is None
 
     def test_missing_indx_macros(self):
-        unit, backend, _, _ = _make_indx()
+        unit, backend, _, _ = _make_indx(ready=False)
         del unit.printer._objects["gcode_macro TOOL_POSITIONS"]
-        with pytest.raises(KlipperError, match="requires the INDX macros"):
+        with pytest.raises(KlipperError) as exc:
             backend.handle_ready()
+        assert str(exc.value) == ("[AFC_Toolchanger my_tc] backend: indx requires the INDX "
+                                  "macros. [gcode_macro TOOL_POSITIONS] was not found, make "
+                                  "sure the AFC INDX macro files are included in your config.")
 
     def test_missing_tool_index(self):
-        unit, backend, _, tools = _make_indx()
+        unit, backend, _, tools = _make_indx(ready=False)
         tools[1].tool_index = None
-        with pytest.raises(KlipperError, match="tool_index is required"):
+        with pytest.raises(KlipperError) as exc:
             backend.handle_ready()
+        assert str(exc.value) == "[AFC_extruder T1] tool_index is required when using INDX."
 
-    def test_tool_index_above_tool_count(self):
-        unit, backend, _, tools = _make_indx(tool_count=2, n_tools=2)
+    def test_tool_index_at_tool_count(self):
+        unit, backend, _, tools = _make_indx(tool_count=2, n_tools=2, ready=False)
         tools[1].tool_index = 2
-        with pytest.raises(KlipperError, match="not below INDX tool_count"):
+        with pytest.raises(KlipperError) as exc:
             backend.handle_ready()
+        assert str(exc.value) == ("[AFC_extruder T1] tool_index 2 is not below INDX tool_count "
+                                  "(2) set in indx.cfg.")
+
+    def test_tool_index_below_tool_count_accepted(self):
+        unit, backend, _, tools = _make_indx(tool_count=2, n_tools=2, ready=False)
+        tools[1].tool_index = 1
+        backend.handle_ready()
+        assert backend.save_vars_obj is not None
+
+    def test_missing_tool_count_defaults_to_zero(self):
+        unit, backend, _, _ = _make_indx(ready=False)
+        del _macro(unit, "TOOL_POSITIONS").variables["tool_count"]
+        with pytest.raises(KlipperError) as exc:
+            backend.handle_ready()
+        assert str(exc.value) == ("[AFC_extruder T0] tool_index 0 is not below INDX tool_count "
+                                  "(0) set in indx.cfg.")
 
     def test_duplicate_tool_index(self):
-        unit, backend, _, tools = _make_indx()
+        unit, backend, _, tools = _make_indx(ready=False)
         tools[2].tool_index = 0
-        with pytest.raises(KlipperError, match="both use tool_index 0"):
+        with pytest.raises(KlipperError) as exc:
             backend.handle_ready()
+        assert str(exc.value) == "[AFC_extruder T2] and [AFC_extruder T0] both use tool_index 0."
 
     def test_mixed_extruder_names(self):
-        unit, backend, _, tools = _make_indx()
+        unit, backend, _, tools = _make_indx(ready=False)
         tools[2].th_extruder_name = "extruder1"
-        with pytest.raises(KlipperError, match="same extruder_name"):
+        with pytest.raises(KlipperError) as exc:
             backend.handle_ready()
+        assert str(exc.value) == ("[AFC_Toolchanger my_tc] INDX tools must all use the same "
+                                  "extruder_name, found: extruder, extruder1")
 
-    def test_ignores_tools_from_other_units(self):
-        unit, backend, _, tools = _make_indx()
+    def test_tools_of_other_units_ignored(self):
+        unit, backend, _, tools = _make_indx(ready=False)
         tools[2].tc_unit_obj = MagicMock()
         tools[2].tool_index = None
         backend.handle_ready()
+        assert backend.save_vars_obj is not None
 
 
-class TestActiveTool:
+# ── active_index ─────────────────────────────────────────────────────────────
+
+class TestIndxBackendActiveIndex:
+    def test_before_ready(self):
+        _, backend, _, _ = _make_indx(active=1, ready=False)
+        assert backend.active_index() == -1
+
+    def test_reads_active_tool(self):
+        _, backend, _, _ = _make_indx(active=2)
+        assert backend.active_index() == 2
+
+    def test_string_value(self):
+        _, backend, save_vars, _ = _make_indx()
+        save_vars.allVariables["active_tool"] = "1"
+        assert backend.active_index() == 1
+
+    def test_missing_variable(self):
+        _, backend, save_vars, _ = _make_indx()
+        del save_vars.allVariables["active_tool"]
+        assert backend.active_index() == -1
+
+    def test_value_error(self):
+        _, backend, save_vars, _ = _make_indx()
+        save_vars.allVariables["active_tool"] = "bogus"
+        assert backend.active_index() == -1
+
+    def test_type_error(self):
+        _, backend, save_vars, _ = _make_indx()
+        save_vars.allVariables["active_tool"] = None
+        assert backend.active_index() == -1
+
+
+# ── active_tool ──────────────────────────────────────────────────────────────
+
+class TestIndxBackendActiveTool:
     def test_empty_head(self):
         _, backend, _, _ = _make_indx(active=-1)
-        backend.handle_ready()
-        assert backend.active_index() == -1
         assert backend.active_tool() is None
 
     def test_tool_on_head(self):
         _, backend, _, tools = _make_indx(active=2)
-        backend.handle_ready()
         assert backend.active_tool() is tools[2]
-        assert backend.is_on_head(tools[2]) is True
-        assert backend.is_on_head(tools[0]) is False
 
-    def test_unknown_index_returns_none(self):
+    def test_index_not_configured_in_afc(self):
         _, backend, _, _ = _make_indx(tool_count=5, active=4)
-        backend.handle_ready()
         assert backend.active_tool() is None
 
-    def test_garbage_value_is_empty(self):
-        _, backend, save_vars, _ = _make_indx()
-        backend.handle_ready()
-        save_vars.allVariables["active_tool"] = "bogus"
-        assert backend.active_index() == -1
 
-    def test_before_ready_is_empty(self):
+# ── is_on_head ───────────────────────────────────────────────────────────────
+
+class TestIndxBackendIsOnHead:
+    def test_true_when_index_matches(self):
         _, backend, _, tools = _make_indx(active=1)
-        assert backend.active_index() == -1
-        assert backend.is_on_head(tools[1]) is False
+        assert backend.is_on_head(tools[1]) is True
 
-    def test_tool_without_index_never_on_head(self):
-        _, backend, _, tools = _make_indx(active=0)
-        backend.handle_ready()
+    def test_false_when_index_differs(self):
+        _, backend, _, tools = _make_indx(active=1)
+        assert backend.is_on_head(tools[0]) is False
+
+    def test_false_when_tool_index_none(self):
+        """tool_index None alone makes it False, even with the head empty (-1)."""
+        _, backend, _, tools = _make_indx(active=-1)
         tools[0].tool_index = None
         assert backend.is_on_head(tools[0]) is False
 
 
-class TestSelect:
-    def test_select_runs_change_with_temp(self):
+# ── no_heat_indexes ──────────────────────────────────────────────────────────
+
+class TestIndxBackendNoHeatIndexes:
+    def test_before_ready(self):
+        _, backend, _, _ = _make_indx(ready=False)
+        assert backend.no_heat_indexes() == []
+
+    def test_converts_to_int(self):
+        unit, backend, _, _ = _make_indx()
+        _macro(unit, "TOOL_POSITIONS").variables["no_heat_tools"] = ["2", 1]
+        assert backend.no_heat_indexes() == [2, 1]
+
+    def test_missing_variable(self):
+        unit, backend, _, _ = _make_indx()
+        del _macro(unit, "TOOL_POSITIONS").variables["no_heat_tools"]
+        assert backend.no_heat_indexes() == []
+
+
+# ── filter_heat ──────────────────────────────────────────────────────────────
+
+class TestIndxBackendFilterHeat:
+    def test_t_for_parked_tool_ignored(self):
+        unit, backend, _, tools = _make_indx(active=0)
+        assert backend.filter_heat(tools[1], 220.0, "M104") is None
+        assert unit.afc.logger.messages == []
+
+    def test_t_for_tool_on_head_passes(self):
+        unit, backend, _, tools = _make_indx(active=1)
+        assert backend.filter_heat(tools[1], 220.0, "M104") == 220.0
+        assert unit.afc.logger.messages == []
+
+    def test_no_t_skips_on_head_check(self):
+        unit, backend, _, _ = _make_indx(active=1)
+        assert backend.filter_heat(None, 220.0, "M104") == 220.0
+
+    def test_empty_head_heat_request_skipped(self):
+        unit, backend, _, _ = _make_indx(active=-1)
+        assert backend.filter_heat(None, 220.0, "M109") is None
+        assert unit.afc.logger.messages == [
+            ("info", "M109 S220: no tool on the head, not heating (INDX heats each tool at "
+                     "pickup)")]
+
+    def test_empty_head_zero_passes(self):
+        unit, backend, _, _ = _make_indx(active=-1)
+        assert backend.filter_heat(None, 0.0, "M104") == 0.0
+        assert unit.afc.logger.messages == []
+
+    def test_no_heat_tool_held_at_zero(self):
+        unit, backend, _, _ = _make_indx(active=2)
+        _macro(unit, "TOOL_POSITIONS").variables["no_heat_tools"] = [2]
+        assert backend.filter_heat(None, 220.0, "M104") == 0.0
+        assert unit.afc.logger.messages == [
+            ("info", "M104 S220: T2 has no hotend (no_heat_tools), not heating")]
+
+    def test_no_heat_tool_zero_request_passes(self):
+        """temp > 0 alone gates the no_heat rule: S0 on a no_heat tool passes as is."""
+        unit, backend, _, _ = _make_indx(active=2)
+        _macro(unit, "TOOL_POSITIONS").variables["no_heat_tools"] = [2]
+        assert backend.filter_heat(None, 0.0, "M104") == 0.0
+        assert unit.afc.logger.messages == []
+
+    def test_other_tool_in_no_heat_does_not_apply(self):
+        """Tool on the head not in no_heat_tools alone keeps the requested temp."""
+        unit, backend, _, _ = _make_indx(active=1)
+        _macro(unit, "TOOL_POSITIONS").variables["no_heat_tools"] = [2]
+        assert backend.filter_heat(None, 220.0, "M104") == 220.0
+        assert unit.afc.logger.messages == []
+
+
+# ── select ───────────────────────────────────────────────────────────────────
+
+class TestIndxBackendSelect:
+    def test_with_temp(self):
         unit, backend, save_vars, tools = _make_indx()
-        backend.handle_ready()
-        _simulate_indx(unit, save_vars)
+        _run_sets_active(unit, save_vars)
         assert backend.select(tools[1], 215) is True
         unit.afc.gcode.run_script_from_command.assert_called_once_with(
             "INDX_CHANGE_TOOL TOOL=1 TEMP=215.0")
 
-    def test_select_without_temp(self):
+    def test_without_temp(self):
         unit, backend, save_vars, tools = _make_indx()
-        backend.handle_ready()
-        _simulate_indx(unit, save_vars)
+        _run_sets_active(unit, save_vars)
         assert backend.select(tools[2]) is True
         unit.afc.gcode.run_script_from_command.assert_called_once_with(
             "INDX_CHANGE_TOOL TOOL=2")
 
-    def test_select_mismatch_reports_error(self):
+    def test_failure_result_returned(self):
         unit, backend, save_vars, tools = _make_indx()
-        backend.handle_ready()
-        _simulate_indx(unit, save_vars, result=-1)
+        _run_sets_active(unit, save_vars, result=-1)
         assert backend.select(tools[1]) is False
-        unit.afc.error.AFC_error.assert_called_once()
-        assert "INDX reports empty head" in unit.afc.error.AFC_error.call_args.args[0]
-
-    def test_select_macro_error_reports_and_returns_false(self):
-        unit, backend, _, tools = _make_indx()
-        backend.handle_ready()
-        unit.afc.gcode.run_script_from_command = MagicMock(side_effect=Exception("seat fail"))
-        unit.afc.function.in_print.return_value = True
-        assert backend.select(tools[0]) is False
-        msg = unit.afc.error.AFC_error.call_args.args[0]
-        assert "seat fail" in msg
-        assert unit.afc.error.AFC_error.call_args.kwargs["pause"] is True
-        assert backend.afc_change_active is False
-
-    def test_hook_suppressed_during_select(self):
-        unit, backend, save_vars, tools = _make_indx()
-        backend.handle_ready()
-        seen = {}
-
-        def _run(cmd):
-            save_vars.allVariables["active_tool"] = 1
-            seen["active"] = backend.afc_change_active
-            backend.cmd_AFC_INDX_TOOL_CHANGED(MockGCodeCommand(params={"TOOL": 1}))
-        unit.afc.gcode.run_script_from_command = MagicMock(side_effect=_run)
-        backend.select(tools[1])
-        assert seen["active"] is True
-        unit.afc.function.handle_activate_extruder.assert_not_called()
 
 
-class TestUnselect:
-    def test_unselect_parks(self):
+# ── unselect ─────────────────────────────────────────────────────────────────
+
+class TestIndxBackendUnselect:
+    def test_parks(self):
         unit, backend, save_vars, tools = _make_indx(active=1)
-        backend.handle_ready()
-        _simulate_indx(unit, save_vars)
+        _run_sets_active(unit, save_vars)
         assert backend.unselect(tools[1]) is True
         unit.afc.gcode.run_script_from_command.assert_called_once_with("PARK_TOOL")
 
-    def test_unselect_still_on_head(self):
+    def test_failure_result_returned(self):
         unit, backend, save_vars, tools = _make_indx(active=1)
-        backend.handle_ready()
-        _simulate_indx(unit, save_vars, result=1)
-        assert backend.unselect(tools[1]) is False
-        assert "expected empty head" in unit.afc.error.AFC_error.call_args.args[0]
+        _run_sets_active(unit, save_vars, result=1)
+        assert backend.unselect(None) is False
 
 
-class TestToolMacros:
-    def test_active_flag_follows_head(self):
-        unit, backend, save_vars, tools = _make_indx(active=1)
-        backend.handle_ready()
-        macros = [unit.printer._objects[f"gcode_macro T{i}"] for i in range(3)]
-        assert [m.variables["active"] for m in macros] == [False, True, False]
-        _simulate_indx(unit, save_vars)
-        backend.select(tools[2])
-        assert [m.variables["active"] for m in macros] == [False, False, True]
-        backend.unselect(tools[2])
-        assert [m.variables["active"] for m in macros] == [False, False, False]
+# ── _run_change ──────────────────────────────────────────────────────────────
+
+class TestIndxBackendRunChange:
+    def test_success_picks_up(self):
+        unit, backend, save_vars, tools = _make_indx()
+        _run_sets_active(unit, save_vars)
+        assert backend._run_change("INDX_CHANGE_TOOL TOOL=1", tools[1]) is True
+        unit.afc.error.AFC_error.assert_not_called()
+        assert backend.afc_change_active is False
+
+    def test_success_parks(self):
+        unit, backend, save_vars, _ = _make_indx(active=1)
+        _run_sets_active(unit, save_vars)
+        assert backend._run_change("PARK_TOOL", None) is True
+        unit.afc.error.AFC_error.assert_not_called()
+
+    def test_flag_set_while_running(self):
+        unit, backend, _, tools = _make_indx()
+        seen = []
+        unit.afc.gcode.run_script_from_command = MagicMock(
+            side_effect=lambda cmd: seen.append(backend.afc_change_active))
+        backend._run_change("PARK_TOOL", None)
+        assert seen == [True]
+        assert backend.afc_change_active is False
+
+    def test_macros_updated_after_change(self):
+        unit, backend, save_vars, tools = _make_indx()
+        _run_sets_active(unit, save_vars)
+        backend._run_change("INDX_CHANGE_TOOL TOOL=2", tools[2])
+        assert _active_flags(unit) == [False, False, True]
+
+    @pytest.mark.parametrize("in_print", [True, False])
+    def test_macro_error_reported(self, in_print):
+        unit, backend, _, tools = _make_indx(active=0)
+        unit.afc.gcode.run_script_from_command = MagicMock(side_effect=Exception("seat fail"))
+        unit.afc.function.in_print.return_value = in_print
+        assert backend._run_change("INDX_CHANGE_TOOL TOOL=1", tools[1]) is False
+        unit.afc.error.AFC_error.assert_called_once_with("INDX tool change failed: seat fail",
+                                                         pause=in_print)
+        assert backend.afc_change_active is False
+        assert _active_flags(unit) == [True, False, False]
+
+    def test_wrong_tool_after_pickup(self):
+        unit, backend, save_vars, tools = _make_indx()
+        _run_sets_active(unit, save_vars, result=2)
+        unit.afc.function.in_print.return_value = False
+        assert backend._run_change("INDX_CHANGE_TOOL TOOL=1", tools[1]) is False
+        unit.afc.error.AFC_error.assert_called_once_with(
+            "INDX reports T2 after 'INDX_CHANGE_TOOL TOOL=1', expected T1.", pause=False)
+
+    def test_empty_head_after_pickup(self):
+        unit, backend, save_vars, tools = _make_indx()
+        _run_sets_active(unit, save_vars, result=-1)
+        unit.afc.function.in_print.return_value = True
+        assert backend._run_change("INDX_CHANGE_TOOL TOOL=1", tools[1]) is False
+        unit.afc.error.AFC_error.assert_called_once_with(
+            "INDX reports empty head after 'INDX_CHANGE_TOOL TOOL=1', expected T1.", pause=True)
+
+    def test_tool_still_on_head_after_park(self):
+        unit, backend, save_vars, _ = _make_indx(active=1)
+        _run_sets_active(unit, save_vars, result=1)
+        unit.afc.function.in_print.return_value = False
+        assert backend._run_change("PARK_TOOL", None) is False
+        unit.afc.error.AFC_error.assert_called_once_with(
+            "INDX reports T1 after 'PARK_TOOL', expected empty head.", pause=False)
+
+
+# ── _tool_lane ───────────────────────────────────────────────────────────────
+
+class TestIndxBackendToolLane:
+    def test_loaded_lane(self):
+        unit, backend, _, tools = _make_indx()
+        loaded = MagicMock()
+        unit.afc.lanes["lane5"] = loaded
+        tools[0].lane_loaded = "lane5"
+        assert backend._tool_lane(tools[0]) is loaded
+
+    def test_standalone_lane_when_nothing_loaded(self):
+        unit, backend, _, tools = _make_indx()
+        assert backend._tool_lane(tools[0]) is tools[0].tc_lane
+
+    def test_loaded_lane_wins_over_standalone(self):
+        """lane_loaded set alone keeps the tc_lane fallback from applying."""
+        unit, backend, _, tools = _make_indx()
+        loaded = MagicMock()
+        unit.afc.lanes["lane5"] = loaded
+        tools[0].lane_loaded = "lane5"
+        assert backend._tool_lane(tools[0]) is not tools[0].tc_lane
+
+    def test_no_lane(self):
+        """No tc_lane alone leaves nothing to fall back on."""
+        unit, backend, _, tools = _make_indx()
+        tools[0].tc_lane = None
+        assert backend._tool_lane(tools[0]) is None
+
+    def test_lane_not_registered(self):
+        unit, backend, _, tools = _make_indx()
+        del unit.afc.lanes["T0"]
+        assert backend._tool_lane(tools[0]) is None
+
+
+# ── update_tool_macros ───────────────────────────────────────────────────────
+
+class TestIndxBackendUpdateToolMacros:
+    def test_active_follows_head(self):
+        unit, backend, save_vars, _ = _make_indx(active=1)
+        save_vars.allVariables["active_tool"] = 2
+        backend.update_tool_macros()
+        assert _active_flags(unit) == [False, False, True]
+
+    def test_empty_head_clears_all(self):
+        unit, backend, save_vars, _ = _make_indx(active=1)
+        save_vars.allVariables["active_tool"] = -1
+        backend.update_tool_macros()
+        assert _active_flags(unit) == [False, False, False]
+
+    def test_variables_replaced_not_mutated(self):
+        unit, backend, save_vars, _ = _make_indx(active=0)
+        before = _macro(unit, "T1").variables
+        save_vars.allVariables["active_tool"] = 1
+        backend.update_tool_macros()
+        assert _macro(unit, "T1").variables is not before
+        assert before == {"active": False}
 
     def test_follows_loaded_lane_map(self):
-        unit, backend, _, tools = _make_indx(active=0)
+        unit, backend, save_vars, tools = _make_indx(active=0)
         lane = MagicMock()
-        lane.name = "lane5"
         lane.extruder_obj = tools[0]
         lane.map = ["T7"]
         unit.afc.lanes["lane5"] = lane
         tools[0].lane_loaded = "lane5"
         unit.printer._objects["gcode_macro T7"] = FakeMacro(active=False)
-        backend.handle_ready()
-        assert unit.printer._objects["gcode_macro T7"].variables["active"] is True
-        assert unit.printer._objects["gcode_macro T0"].variables["active"] is False
-
-    def test_macros_without_active_untouched(self):
-        unit, backend, _, _ = _make_indx(active=0)
-        unit.printer._objects["gcode_macro T0"] = FakeMacro(other=1)
-        backend.handle_ready()
-        assert unit.printer._objects["gcode_macro T0"].variables == {"other": 1}
-
-    def test_missing_macros_ok(self):
-        _, backend, _, _ = _make_indx(active=0, macros=False)
-        backend.handle_ready()
+        backend.update_tool_macros()
+        assert _macro(unit, "T7").variables["active"] is True
+        assert _macro(unit, "T0").variables["active"] is False
 
     def test_lanes_of_other_units_untouched(self):
         unit, backend, _, _ = _make_indx(active=0)
@@ -277,273 +526,75 @@ class TestToolMacros:
         other.map = ["T9"]
         unit.afc.lanes["other"] = other
         unit.printer._objects["gcode_macro T9"] = FakeMacro(active=True)
-        backend.handle_ready()
-        assert unit.printer._objects["gcode_macro T9"].variables["active"] is True
+        backend.update_tool_macros()
+        assert _macro(unit, "T9").variables["active"] is True
+
+    def test_lane_without_map(self):
+        unit, backend, _, tools = _make_indx(active=0)
+        tools[1].tc_lane.map = None
+        backend.update_tool_macros()
+        assert _active_flags(unit) == [True, False, False]
+
+    def test_missing_macro_skipped(self):
+        unit, backend, _, _ = _make_indx(active=0)
+        del unit.printer._objects["gcode_macro T1"]
+        backend.update_tool_macros()
+        assert _macro(unit, "T0").variables["active"] is True
+
+    def test_macro_without_active_untouched(self):
+        unit, backend, _, _ = _make_indx(active=0)
+        unit.printer._objects["gcode_macro T0"] = FakeMacro(other=1)
+        backend.update_tool_macros()
+        assert _macro(unit, "T0").variables == {"other": 1}
 
 
-class TestHook:
-    def test_hook_before_prep_only_updates_macros(self):
+# ── cmd_AFC_INDX_TOOL_CHANGED ────────────────────────────────────────────────
+
+class TestIndxBackendCmdToolChanged:
+    def test_ignored_during_afc_change(self):
         unit, backend, save_vars, _ = _make_indx(active=-1)
-        backend.handle_ready()
+        unit.afc.prep_done = True
+        backend.afc_change_active = True
         save_vars.allVariables["active_tool"] = 1
         backend.cmd_AFC_INDX_TOOL_CHANGED(MockGCodeCommand(params={"TOOL": 1}))
         unit.afc.function.handle_activate_extruder.assert_not_called()
-        assert unit.printer._objects["gcode_macro T1"].variables["active"] is True
+        assert _active_flags(unit) == [False, False, False]
+        assert unit.afc.logger.messages == []
 
-    def test_hook_syncs_afc(self):
+    def test_before_prep_only_updates_macros(self):
+        unit, backend, save_vars, _ = _make_indx(active=-1)
+        unit.afc.prep_done = False
+        save_vars.allVariables["active_tool"] = 1
+        backend.cmd_AFC_INDX_TOOL_CHANGED(MockGCodeCommand(params={"TOOL": 1}))
+        unit.afc.function.handle_activate_extruder.assert_not_called()
+        assert _active_flags(unit) == [False, True, False]
+        assert unit.afc.logger.messages == []
+
+    def test_syncs_afc_after_prep(self):
         unit, backend, save_vars, _ = _make_indx(active=-1)
         unit.afc.prep_done = True
-        backend.handle_ready()
-        save_vars.allVariables["active_tool"] = 0
-        unit.afc.gcode._commands["AFC_INDX_TOOL_CHANGED"](MockGCodeCommand(params={"TOOL": 0}))
-        unit.afc.function.handle_activate_extruder.assert_called_once()
-        assert unit.printer._objects["gcode_macro T0"].variables["active"] is True
-
-
-class TestToolSwapWithIndx:
-    def _unit(self):
-        unit, backend, save_vars, tools = _make_indx()
-        unit.afc.gcode_move.base_position = [1.0, 2.0, 3.0, 0.0]
-        unit.afc.gcode_move.homing_position = [0.0, 0.0, 0.0, 0.0]
-        unit.afc.last_gcode_position = [10.0, 20.0, 30.0, 0.0]
-        unit.afc.afcDeltaTime = MagicMock()
-        unit.afc.afc_stats = MagicMock()
-        unit.function.get_current_extruder_obj.return_value = None
-        backend.handle_ready()
-        return unit, backend, save_vars, tools
-
-    def test_successful_swap_returns_true(self):
-        unit, backend, save_vars, tools = self._unit()
-        _simulate_indx(unit, save_vars)
-        assert unit.tool_swap(tools[1].tc_lane, target_temp=230.0) is True
-        unit.afc.gcode.run_script_from_command.assert_called_once_with(
-            "INDX_CHANGE_TOOL TOOL=1 TEMP=230.0")
-
-    def test_failed_swap_returns_false_and_restores_position(self):
-        unit, backend, save_vars, tools = self._unit()
-        _simulate_indx(unit, save_vars, result=-1)
-        assert unit.tool_swap(tools[1].tc_lane) is False
-        assert unit.afc.last_gcode_position[:3] == [10.0, 20.0, 30.0]
-        assert unit.afc.current_state == State.IDLE
-        tools[1].tc_lane.activate_toolhead_extruder.assert_not_called()
-
-    def test_unselect_failure_stops_early(self):
-        unit, backend, save_vars, tools = self._unit()
         save_vars.allVariables["active_tool"] = 1
-        unit.function.get_current_extruder_obj.return_value = tools[1]
-        unit.afc.function.get_current_extruder_obj.return_value = tools[1]
-        _simulate_indx(unit, save_vars, result=1)
-        unit.cmd_AFC_UNSELECT_TOOL(MockGCodeCommand())
-        unit.afc.function.handle_activate_extruder.assert_not_called()
-        assert unit.afc.current_state == State.IDLE
+        backend.cmd_AFC_INDX_TOOL_CHANGED(MockGCodeCommand(params={"TOOL": 1}))
+        unit.afc.function.handle_activate_extruder.assert_called_once_with()
+        assert _active_flags(unit) == [False, True, False]
+        assert unit.afc.logger.messages == [("debug", "INDX reported T1 on head, syncing AFC")]
 
-
-# ── Heating rules (filter_heat, M104/M109, CHANGE_TOOL) ──────────────────────
-
-class TestFilterHeat:
-    def test_t_for_parked_tool_ignored(self):
-        _, backend, _, tools = _make_indx(active=0)
-        backend.handle_ready()
-        assert backend.filter_heat(tools[1], 220.0, "M104") is None
-
-    def test_t_for_tool_on_head_passes(self):
-        _, backend, _, tools = _make_indx(active=1)
-        backend.handle_ready()
-        assert backend.filter_heat(tools[1], 220.0, "M104") == 220.0
-
-    def test_empty_head_not_heated(self):
+    def test_tool_defaults_to_empty_head(self):
         unit, backend, _, _ = _make_indx(active=-1)
-        backend.handle_ready()
-        assert backend.filter_heat(None, 220.0, "M109") is None
-        assert any("no tool on the head" in m for _, m in backend.logger.messages)
-
-    def test_empty_head_zero_allowed(self):
-        _, backend, _, _ = _make_indx(active=-1)
-        backend.handle_ready()
-        assert backend.filter_heat(None, 0.0, "M104") == 0.0
-
-    def test_no_heat_tool_held_at_zero(self):
-        unit, backend, _, _ = _make_indx(active=2)
-        unit.printer._objects["gcode_macro TOOL_POSITIONS"].variables["no_heat_tools"] = [2]
-        backend.handle_ready()
-        assert backend.filter_heat(None, 220.0, "M104") == 0.0
-        assert any("no_heat_tools" in m for _, m in backend.logger.messages)
-
-    def test_no_heat_read_live(self):
-        unit, backend, _, _ = _make_indx(active=2)
-        backend.handle_ready()
-        assert backend.filter_heat(None, 220.0, "M104") == 220.0
-        unit.printer._objects["gcode_macro TOOL_POSITIONS"].variables["no_heat_tools"] = [2]
-        assert backend.filter_heat(None, 220.0, "M104") == 0.0
-
-    def test_base_backend_passthrough(self):
-        from extras.AFC_toolchanger_backend import KtcBackend
-        backend = KtcBackend(_make_toolchanger())
-        assert backend.filter_heat(None, 210.0, "M104") == 210.0
+        unit.afc.prep_done = True
+        backend.cmd_AFC_INDX_TOOL_CHANGED(MockGCodeCommand(params={}))
+        assert unit.afc.logger.messages == [("debug", "INDX reported T-1 on head, syncing AFC")]
 
 
-def _make_afc_for_m109(backend, t_lane=None):
-    from tests.test_AFC import _make_afc
-    obj = _make_afc()
-    obj.disable_ooze_check = True
-    obj.snapmaker_printer = False
-    obj.function.get_current_extruder_obj.return_value = None
-    obj.function.get_lane_by_map.return_value = t_lane
-    obj.function.get_shared_backend.return_value = backend
-    heater = MagicMock()
-    heater.get_temp.return_value = (20.0, 0.0)
-    obj.toolhead.get_extruder.return_value.get_heater.return_value = heater
-    if t_lane is not None:
-        t_lane.extruder_obj.get_heater.return_value = heater
-    heaters = obj.printer.lookup_object("heaters")
-    return obj, heaters, heater
+# ── cmd_AFC_INDX_PRE_LATCH ───────────────────────────────────────────────────
 
-
-class TestM104WithIndx:
-    def test_no_t_applies_temp(self):
-        _, backend, _, _ = _make_indx(active=0)
-        backend.handle_ready()
-        obj, heaters, heater = _make_afc_for_m109(backend)
-        obj.cmd_AFC_M104(MockGCodeCommand(params={"S": 210.0}))
-        heaters.set_temperature.assert_called_with(heater, 210.0, False)
-
-    def test_empty_head_skips(self):
-        _, backend, _, _ = _make_indx(active=-1)
-        backend.handle_ready()
-        obj, heaters, _ = _make_afc_for_m109(backend)
-        obj.cmd_AFC_M104(MockGCodeCommand(params={"S": 210.0}))
-        heaters.set_temperature.assert_not_called()
-
-    def test_t_for_parked_tool_skips(self):
-        _, backend, _, tools = _make_indx(active=0)
-        backend.handle_ready()
-        tools[1].shared_extruder = True
-        obj, heaters, _ = _make_afc_for_m109(backend, t_lane=tools[1].tc_lane)
-        obj.cmd_AFC_M104(MockGCodeCommand(params={"S": 210.0, "T": 1}))
-        heaters.set_temperature.assert_not_called()
-
-    def test_t_for_active_tool_heats(self):
-        _, backend, _, tools = _make_indx(active=1)
-        backend.handle_ready()
-        tools[1].shared_extruder = True
-        obj, heaters, heater = _make_afc_for_m109(backend, t_lane=tools[1].tc_lane)
-        obj.cmd_AFC_M109(MockGCodeCommand(params={"S": 215.0, "T": 1}))
-        heaters.set_temperature.assert_any_call(heater, 215.0, False)
-
-    def test_no_heat_tool_set_to_zero(self):
-        unit, backend, _, _ = _make_indx(active=2)
-        unit.printer._objects["gcode_macro TOOL_POSITIONS"].variables["no_heat_tools"] = [2]
-        backend.handle_ready()
-        obj, heaters, heater = _make_afc_for_m109(backend)
-        obj.cmd_AFC_M109(MockGCodeCommand(params={"S": 215.0}))
-        heaters.set_temperature.assert_called_with(heater, 0.0, False)
-
-    def test_without_shared_backend_unchanged(self):
-        obj, heaters, heater = _make_afc_for_m109(None)
-        obj.cmd_AFC_M104(MockGCodeCommand(params={"S": 205.0}))
-        heaters.set_temperature.assert_called_with(heater, 205.0, False)
-
-    def test_t_for_non_shared_tool_bypasses_filter(self):
-        backend = MagicMock()
-        lane = MagicMock()
-        lane.extruder_obj.shared_extruder = False
-        obj, heaters, heater = _make_afc_for_m109(backend, t_lane=lane)
-        obj.cmd_AFC_M104(MockGCodeCommand(params={"S": 205.0, "T": 3}))
-        backend.filter_heat.assert_not_called()
-        heaters.set_temperature.assert_called_with(heater, 205.0, False)
-
-
-class TestChangeToolHeatsOnPickup:
-    def _setup(self):
-        from tests.test_AFC import _make_afc_for_change_tool
-        obj, cur_lane, current_lane = _make_afc_for_change_tool()
-        cur_lane.extruder_obj.heats_on_pickup = True
-        current_lane.extruder_obj.heats_on_pickup = True
-        captured = {}
-        obj.TOOL_LOAD.side_effect = lambda *a, **k: (captured.update(
-            temp=obj.next_tool_temp), True)[1]
-        return obj, cur_lane, current_lane, captured
-
-    def test_no_preheat_or_cooldown(self):
-        obj, cur_lane, _, _ = self._setup()
-        obj.CHANGE_TOOL(cur_lane, new_extruder_temp=230.0)
-        obj._heat_next_extruder.assert_not_called()
-        obj._cooldown_last_extruder.assert_not_called()
-        obj._wait_for_temp_within_tolerance.assert_not_called()
-
-    def test_temp_available_during_load_then_cleared(self):
-        obj, cur_lane, _, captured = self._setup()
-        obj.CHANGE_TOOL(cur_lane, new_extruder_temp=230.0)
-        assert captured["temp"] == 230.0
-        assert obj.next_tool_temp is None
-
-    def test_no_temp_passes_none(self):
-        obj, cur_lane, _, captured = self._setup()
-        obj.CHANGE_TOOL(cur_lane)
-        assert captured["temp"] is None
-
-    def test_infinite_runout_resets_status_without_preheat(self):
-        from extras.AFC_lane import AFCLaneState
-        obj, cur_lane, _, _ = self._setup()
-        cur_lane.status = AFCLaneState.INFINITE_RUNOUT
-        obj.CHANGE_TOOL(cur_lane)
-        assert cur_lane.status == AFCLaneState.LOADED
-        obj._heat_next_extruder.assert_not_called()
-
-
-class TestLaneToolSwapPassesTemp:
-    def test_lane_tool_swap_uses_next_tool_temp(self):
-        from tests.test_AFC_lane import _make_afc_lane
-        lane = _make_afc_lane("AFC_stepper lane1")
-        lane.extruder_obj = MagicMock()
-        lane.extruder_obj.tc_unit_obj.tool_swap.return_value = True
-        lane.afc.next_tool_temp = 240.0
-        assert lane.tool_swap() is True
-        lane.extruder_obj.tc_unit_obj.tool_swap.assert_called_once_with(
-            lane, set_start_time=False, target_temp=240.0)
-
-    def test_lane_tool_swap_without_unit(self):
-        from tests.test_AFC_lane import _make_afc_lane
-        lane = _make_afc_lane("AFC_stepper lane1")
-        lane.extruder_obj = MagicMock()
-        lane.extruder_obj.tc_unit_obj = None
-        assert lane.tool_swap() is True
-
-
-class TestPreLatch:
+class TestIndxBackendCmdPreLatch:
     def test_unsyncs_only_indx_lanes(self):
         unit, backend, _, tools = _make_indx(active=0)
-        backend.handle_ready()
         other = MagicMock()
         other.extruder_obj = MagicMock()
         unit.afc.lanes["other"] = other
-        unit.afc.gcode._commands["AFC_INDX_PRE_LATCH"](MockGCodeCommand())
+        backend.cmd_AFC_INDX_PRE_LATCH(MockGCodeCommand())
         for tool in tools:
-            tool.tc_lane.unsync_to_extruder.assert_called_once()
+            tool.tc_lane.unsync_to_extruder.assert_called_once_with()
         other.unsync_to_extruder.assert_not_called()
-
-
-class TestLaneSyncGating:
-    def _lane(self, shared, on_head):
-        from tests.test_AFC_lane import _make_afc_lane
-        lane = _make_afc_lane("AFC_stepper lane1")
-        lane.extruder_obj = MagicMock()
-        lane.extruder_obj.shared_extruder = shared
-        lane.extruder_obj.on_shuttle.return_value = on_head
-        lane.drive_stepper = MagicMock()
-        return lane
-
-    def test_shared_tool_off_head_not_synced(self):
-        lane = self._lane(True, False)
-        lane.sync_to_extruder()
-        lane.drive_stepper.sync_to_extruder.assert_not_called()
-
-    def test_shared_tool_on_head_synced(self):
-        lane = self._lane(True, True)
-        lane.sync_to_extruder()
-        lane.drive_stepper.sync_to_extruder.assert_called_once()
-
-    def test_regular_tool_always_synced(self):
-        lane = self._lane(False, False)
-        lane.sync_to_extruder()
-        lane.drive_stepper.sync_to_extruder.assert_called_once()

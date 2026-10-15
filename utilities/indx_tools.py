@@ -167,13 +167,15 @@ def update_hardware(text: str, count: int) -> Tuple[str, List[str]]:
     insert_after = max(kept) if kept else max(tools.values())
     new_blocks: List[List[str]] = []
     for i, (name, block) in enumerate(blocks):
-        if i in remove:
-            continue
-        if not block[-1].endswith("\n"):
-            block = block[:-1] + [block[-1] + "\n"]
-        new_blocks.append(block)
+        if i not in remove:
+            if (block
+                and not block[-1].endswith("\n")):
+                block = block[:-1] + [block[-1] + "\n"]
+            new_blocks.append(block)
+        # Insert even when the anchor section was removed, after whatever was kept before it
         if i == insert_after:
-            if trailing_blank(block) == 0:
+            # The preamble block is never removed, so new_blocks is never empty here
+            if trailing_blank(new_blocks[-1]) == 0:
                 new_blocks.append(["\n"])
             for idx in missing:
                 new_blocks.append(new_tool_block(template, idx))

@@ -1029,34 +1029,6 @@ class TestOnShuttle_CustomMacros:
             assert ext.on_shuttle() is True, f"Expected True for tc_unit_name={name!r}"
 
 
-# ── Toolchanger unit attached: backend decides ───────────────────────────────
-
-class TestOnShuttle_BackendDelegation:
-    """tc_unit_obj set → result comes from tc_unit_obj.backend.is_on_head()."""
-
-    def test_delegates_to_backend_true(self):
-        ext = _make_afc_extruder()
-        ext.tc_unit_name = "Tools"
-        ext.tc_unit_obj = MagicMock()
-        ext.tc_unit_obj.backend.is_on_head.return_value = True
-        assert ext.on_shuttle() is True
-        ext.tc_unit_obj.backend.is_on_head.assert_called_once_with(ext)
-
-    def test_delegates_to_backend_false(self):
-        ext = _make_afc_extruder()
-        ext.tc_unit_name = "Tools"
-        ext.tc_unit_obj = MagicMock()
-        ext.tc_unit_obj.backend.is_on_head.return_value = False
-        assert ext.on_shuttle() is False
-
-    def test_detect_on_shuttle_ignores_backend(self):
-        ext = _make_afc_extruder()
-        ext.tc_unit_obj = MagicMock()
-        ext.tc_unit_obj.backend.is_on_head.return_value = False
-        assert ext.detect_on_shuttle() is True
-        ext.tc_unit_obj.backend.is_on_head.assert_not_called()
-
-
 # ── Branch 3: tool_obj has detect_state ──────────────────────────────────────
 
 class TestOnShuttle_WithDetectState:

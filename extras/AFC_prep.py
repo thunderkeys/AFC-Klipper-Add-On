@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from extras.AFC import afc
     from extras.AFC_lane import AFCLane
     from gcode import GCodeCommand
+    from extras.AFC_extruder import AFCExtruder
 
 if TYPE_CHECKING:
     from extras.AFC import afc
@@ -95,6 +96,20 @@ class afcPrep:
                                 break
                     self.logger.info("Done capturing TD-1 data")
 
+    def _activate_shuttle_extruder(self, extruder_obj: AFCExtruder) -> None:
+        """
+        Calls ACTIVATE_EXTRUDER if the tool on the shuttle is not the active klipper extruder.
+        Hotend changer tools all use the same klipper extruder, so there is nothing to activate.
+
+        :param extruder_obj: Tool to check
+        """
+        if (extruder_obj.on_shuttle()
+            and not extruder_obj.shared_extruder
+            and self.afc.function.get_current_extruder() != extruder_obj.th_extruder_name):
+            self.afc.gcode.run_script_from_command(
+                f"ACTIVATE_EXTRUDER EXTRUDER={extruder_obj.th_extruder_name}"
+            )
+
     def PREP(self, gcmd: GCodeCommand) -> None:
         """
         Startup routine: loads saved lane/tool state, checks every unit and lane, assigns T(n)
@@ -134,14 +149,7 @@ class afcPrep:
         for extruder in self.afc.tools.keys():
             extruder_obj=self.afc.tools[extruder]
             extruder_obj.set_status_led( self.afc.led_tool_unloaded )
-            # Shared extruder tools always use the same klipper extruder, nothing to activate
-            if (extruder_obj.on_shuttle()
-                and not extruder_obj.shared_extruder):
-                # Calls ACTIVATE_EXTRUDER if current toolhead on shuttle is not the active extruder
-                if self.afc.function.get_current_extruder() != extruder_obj.th_extruder_name:
-                    self.afc.gcode.run_script_from_command(
-                        f"ACTIVATE_EXTRUDER EXTRUDER={extruder_obj.th_extruder_name}"
-                    )
+            self._activate_shuttle_extruder(extruder_obj)
             if 'system' in units and "extruders" in units["system"]:
                 # Check to see if lane_loaded is in dictionary and its not an empty string
                 if extruder_obj.name in units["system"]["extruders"] and \
