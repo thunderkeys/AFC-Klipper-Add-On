@@ -241,40 +241,9 @@ class TestAfcToolchangerInit:
         names = [c.args[1] for c in calls]
         assert "AFC_SET_TOOLHEAD_LED" in names
 
-    def test_backend_defaults_to_ktc(self):
-        from extras.AFC_toolchanger_backend import KtcBackend
-        tool = AfcToolchanger(_make_config_for_init())
-        assert type(tool.backend) is KtcBackend
-        assert tool.backend.unit is tool
-
-    def test_backend_indx(self):
-        from extras.AFC_indx import IndxBackend
-        tool = AfcToolchanger(_make_config_for_init(values={"backend": "indx"}))
-        assert type(tool.backend) is IndxBackend
-
-    def test_backend_name_case_insensitive(self):
-        from extras.AFC_indx import IndxBackend
-        tool = AfcToolchanger(_make_config_for_init(values={"backend": "INDX"}))
-        assert type(tool.backend) is IndxBackend
-
-    def test_invalid_backend_raises(self):
-        config = _make_config_for_init(values={"backend": "nope"})
-        with pytest.raises(configparser.Error) as exc:
-            AfcToolchanger(config)
-        assert str(exc.value) == ("[AFC_Toolchanger my_tc] invalid backend 'nope', "
-                                  "valid options: indx, ktc")
-
-
-# ── handle_ready ─────────────────────────────────────────────────────────────
-
-class TestAfcToolchangerHandleReady:
-    def test_sorts_lanes_and_readies_backend(self):
-        tool = _make_toolchanger()
-        tool.backend = MagicMock()
-        tool.lanes = {"lane10": "b", "lane2": "a"}
-        tool.handle_ready()
-        assert list(tool.lanes) == ["lane2", "lane10"]
-        tool.backend.handle_ready.assert_called_once_with()
+    def test_class_flags(self):
+        assert AfcToolchanger.shared_extruder is False
+        assert AfcToolchanger.heats_on_pickup is False
 
 
 # ── load_config_prefix / load_config ────────────────────────────────────────
@@ -284,7 +253,43 @@ class TestLoadConfigPrefix:
         from extras.AFC_Toolchanger import load_config_prefix
         config = _make_config_for_init()
         instance = load_config_prefix(config)
-        assert isinstance(instance, AfcToolchanger)
+        assert type(instance) is AfcToolchanger
+
+    def test_ktc_backend_returns_afc_toolchanger(self):
+        from extras.AFC_Toolchanger import load_config_prefix
+        instance = load_config_prefix(_make_config_for_init(values={"backend": "ktc"}))
+        assert type(instance) is AfcToolchanger
+
+    def test_indx_backend_returns_afc_indx(self):
+        from extras.AFC_Toolchanger import load_config_prefix
+        from extras.AFC_indx import AfcIndx
+        instance = load_config_prefix(_make_config_for_init(values={"backend": "indx"}))
+        assert type(instance) is AfcIndx
+
+    def test_backend_name_case_insensitive(self):
+        from extras.AFC_Toolchanger import load_config_prefix
+        from extras.AFC_indx import AfcIndx
+        instance = load_config_prefix(_make_config_for_init(values={"backend": "INDX"}))
+        assert type(instance) is AfcIndx
+
+    def test_invalid_backend_raises(self):
+        from extras.AFC_Toolchanger import load_config_prefix
+        config = _make_config_for_init(values={"backend": "nope"})
+        with pytest.raises(configparser.Error) as exc:
+            load_config_prefix(config)
+        assert str(exc.value) == ("[AFC_Toolchanger my_tc] invalid backend 'nope', "
+                                  "valid options: indx, ktc")
+
+    def test_indx_import_failure_raises_configparser_error(self, monkeypatch):
+        from extras.AFC_Toolchanger import load_config_prefix
+        # A None entry in sys.modules makes the import raise ImportError
+        monkeypatch.setitem(sys.modules, "extras.AFC_indx", None)
+        config = _make_config_for_init(values={"backend": "indx"})
+        with pytest.raises(configparser.Error) as exc_info:
+            load_config_prefix(config)
+        assert str(exc_info.value).startswith(
+            "Error trying to import AFC_indx, please rerun install-afc.sh"
+        )
 
 
 class TestLoadConfig:
@@ -465,8 +470,7 @@ class TestCmdAFCUnselectTool:
     def test_failed_unselect_stops_with_extruder(self):
         extruder = _make_extruder_obj()
         tool = _make_toolchanger_for_unselect(current_extruder=extruder)
-        tool.backend = MagicMock()
-        tool.backend.unselect.return_value = False
+        tool.unselect_tool = MagicMock(return_value=False)
         tool.cmd_AFC_UNSELECT_TOOL(_build_gcmd())
         assert tool.afc.current_state == State.IDLE
         assert extruder.status == State.IDLE
@@ -475,8 +479,7 @@ class TestCmdAFCUnselectTool:
 
     def test_failed_unselect_stops_without_extruder(self):
         tool = _make_toolchanger_for_unselect(current_extruder=None)
-        tool.backend = MagicMock()
-        tool.backend.unselect.return_value = False
+        tool.unselect_tool = MagicMock(return_value=False)
         tool.cmd_AFC_UNSELECT_TOOL(_build_gcmd())
         assert tool.afc.current_state == State.IDLE
         tool.afc.function.handle_activate_extruder.assert_not_called()
@@ -784,19 +787,18 @@ class TestToolSwap:
         lane = _make_lane_for_tool_swap()
         assert tool.tool_swap(lane) is True
 
-    def test_target_temp_passed_to_backend(self):
+    def test_target_temp_passed_to_select_tool(self):
         tool = _make_toolchanger_for_tool_swap()
         tool.function.get_current_extruder_obj.return_value = None
-        tool.backend = MagicMock()
+        tool.select_tool = MagicMock(return_value=True)
         lane = _make_lane_for_tool_swap()
         tool.tool_swap(lane, target_temp=215.0)
-        tool.backend.select.assert_called_once_with(lane.extruder_obj, 215.0)
+        tool.select_tool.assert_called_once_with(lane.extruder_obj, 215.0)
 
     def _failed_swap(self, current_extruder):
         tool = _make_toolchanger_for_tool_swap()
         tool.function.get_current_extruder_obj.return_value = current_extruder
-        tool.backend = MagicMock()
-        tool.backend.select.return_value = False
+        tool.select_tool = MagicMock(return_value=False)
         tool.afc.last_gcode_position = [10.0, 20.0, 5.0, 100.0]
         tool.afc.gcode_move.base_position = [1.0, 2.0, 3.0, 4.0]
         tool.afc.base_position = "unchanged"
@@ -986,16 +988,92 @@ class TestModuleImportGuard:
             "Error trying to import AFC_lane, please rerun install-afc.sh"
         )
 
-    def test_toolchanger_backend_import_failure_raises_configparser_error(self):
-        with pytest.raises(configparser.Error) as exc_info:
-            _exec_afc_toolchanger_with_blocked_dependency("extras.AFC_toolchanger_backend")
-        assert str(exc_info.value).startswith(
-            "Error trying to import AFC_toolchanger_backend, please rerun install-afc.sh"
-        )
 
-    def test_indx_import_failure_raises_configparser_error(self):
-        with pytest.raises(configparser.Error) as exc_info:
-            _exec_afc_toolchanger_with_blocked_dependency("extras.AFC_indx")
-        assert str(exc_info.value).startswith(
-            "Error trying to import AFC_indx, please rerun install-afc.sh"
-        )
+def _make_ktc_extruder(name="extruder", custom_swap=None, custom_unselect=None):
+    ext = _make_extruder_obj(name)
+    ext.custom_tool_swap = custom_swap
+    ext.custom_unselect = custom_unselect
+    return ext
+
+
+def _make_quiet_toolchanger():
+    unit = _make_toolchanger()
+    unit.afc.logger.messages.clear()
+    return unit
+
+
+# ── select_tool ──────────────────────────────────────────────────────────────
+
+class TestSelectTool:
+    def test_plain_extruder_is_tool_zero(self):
+        unit = _make_quiet_toolchanger()
+        assert unit.select_tool(_make_ktc_extruder("extruder")) is True
+        unit.afc.gcode.run_script_from_command.assert_called_once_with("SELECT_TOOL T=0")
+        assert unit.afc.logger.messages == []
+
+    def test_numbered_extruder(self):
+        unit = _make_quiet_toolchanger()
+        assert unit.select_tool(_make_ktc_extruder("extruder3"), target_temp=220.0) is True
+        unit.afc.gcode.run_script_from_command.assert_called_once_with("SELECT_TOOL T=3")
+        assert unit.afc.logger.messages == []
+
+    def test_custom_swap(self):
+        unit = _make_quiet_toolchanger()
+        ext = _make_ktc_extruder("extruder1", custom_swap="PICK_EXTRUDER1")
+        assert unit.select_tool(ext) is True
+        unit.afc.gcode.run_script_from_command.assert_called_once_with("PICK_EXTRUDER1")
+        assert unit.afc.logger.messages == [("info", "Running custom select: PICK_EXTRUDER1")]
+
+
+# ── unselect_tool ────────────────────────────────────────────────────────────
+
+class TestUnselectTool:
+    def test_custom_unselect(self):
+        unit = _make_quiet_toolchanger()
+        assert unit.unselect_tool(_make_ktc_extruder(custom_unselect="PARK_EXTRUDER")) is True
+        unit.afc.gcode.run_script_from_command.assert_called_once_with("PARK_EXTRUDER")
+        assert unit.afc.logger.messages == [("info", "Running custom unselect: PARK_EXTRUDER")]
+
+    def test_extruder_without_custom_unselect(self):
+        """custom_unselect unset alone falls back to UNSELECT_TOOL."""
+        unit = _make_quiet_toolchanger()
+        assert unit.unselect_tool(_make_ktc_extruder()) is True
+        unit.afc.gcode.run_script_from_command.assert_called_once_with("UNSELECT_TOOL")
+        assert unit.afc.logger.messages == []
+
+    def test_no_extruder(self):
+        """No extruder alone falls back to UNSELECT_TOOL."""
+        unit = _make_quiet_toolchanger()
+        assert unit.unselect_tool(None) is True
+        unit.afc.gcode.run_script_from_command.assert_called_once_with("UNSELECT_TOOL")
+        assert unit.afc.logger.messages == []
+
+
+# ── is_on_head ───────────────────────────────────────────────────────────────
+
+class TestIsOnHead:
+    @pytest.mark.parametrize("detected", [True, False])
+    def test_uses_extruder_detection(self, detected):
+        unit = _make_quiet_toolchanger()
+        ext = _make_ktc_extruder()
+        ext.detect_on_shuttle.return_value = detected
+        assert unit.is_on_head(ext) is detected
+        ext.detect_on_shuttle.assert_called_once_with()
+
+
+# ── filter_heat ──────────────────────────────────────────────────────────────
+
+class TestFilterHeat:
+    @pytest.mark.parametrize("temp", [0.0, 210.0])
+    def test_returns_temp_unchanged(self, temp):
+        unit = _make_quiet_toolchanger()
+        assert unit.filter_heat(_make_ktc_extruder(), temp, "M104") == temp
+        assert unit.filter_heat(None, temp, "M109") == temp
+        assert unit.afc.logger.messages == []
+
+
+# ── active_tool ──────────────────────────────────────────────────────────────
+
+class TestActiveTool:
+    def test_not_tracked(self):
+        assert _make_quiet_toolchanger().active_tool() is None

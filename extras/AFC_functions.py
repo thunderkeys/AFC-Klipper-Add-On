@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from extras.AFC_hub import afc_hub
     from gcode import GCodeCommand
     from extras.gcode_move import GCodeMove
-    from extras.AFC_toolchanger_backend import ToolchangerBackend
+    from extras.AFC_Toolchanger import AfcToolchanger
 
 try: from extras.AFC_utils import ERROR_STR
 except: raise error("Error when trying to import AFC_utils.ERROR_STR\n{trace}".format(trace=traceback.format_exc()))
@@ -522,25 +522,25 @@ class afcFunction:
         if tool_obj:
             return current_extruder if tool_obj.on_shuttle() else None
 
-        # Hotend changer tools are keyed by AFC_extruder name, ask the backend instead
+        # Hotend changer tools are keyed by AFC_extruder name, ask the toolchanger unit instead
         for tool in self.afc.tools.values():
             if (tool.th_extruder_name == current_extruder
                 and tool.shared_extruder
                 and tool.tc_unit_obj is not None):
-                active = tool.tc_unit_obj.backend.active_tool()
+                active = tool.tc_unit_obj.active_tool()
                 return active.tool_key if active is not None else None
         return None
 
-    def get_shared_backend(self) -> Optional[ToolchangerBackend]:
+    def get_hotend_changer(self) -> Optional[AfcToolchanger]:
         """
-        Backend of the hotend changer (shared extruder toolchanger), if one is configured.
+        Hotend changer (shared extruder toolchanger) unit, if one is configured.
 
-        :return ToolchangerBackend|None: Hotend changer backend, None if not configured
+        :return AfcToolchanger|None: Hotend changer unit, None if not configured
         """
         for tool in self.afc.tools.values():
             if (tool.shared_extruder
                 and tool.tc_unit_obj is not None):
-                return tool.tc_unit_obj.backend
+                return tool.tc_unit_obj
         return None
 
     def get_tool(self, name: str) -> Optional[AFCExtruder]:

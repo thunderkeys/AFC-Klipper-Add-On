@@ -395,20 +395,20 @@ class AFCExtruder:
         """
         True when this tool shares its klipper extruder with other tools (hotend changers).
 
-        :return bool: True if attached toolchanger backend uses a shared extruder
+        :return bool: True if attached toolchanger unit uses a shared extruder
         """
         return bool(self.tc_unit_obj is not None
-                    and self.tc_unit_obj.backend.shared_extruder)
+                    and self.tc_unit_obj.shared_extruder)
 
     @property
     def heats_on_pickup(self) -> bool:
         """
         True when the toolchanger heats this tool only once it is on the head (hotend changers).
 
-        :return bool: True if attached toolchanger backend heats on pickup
+        :return bool: True if attached toolchanger unit heats on pickup
         """
         return bool(self.tc_unit_obj is not None
-                    and self.tc_unit_obj.backend.heats_on_pickup)
+                    and self.tc_unit_obj.heats_on_pickup)
 
     @property
     def tool_key(self) -> str:
@@ -508,7 +508,7 @@ class AFCExtruder:
         """
         self.reactor = self.afc.reactor
 
-        # Toolchanger unit is looked up first since its backend decides how this tool is keyed
+        # Toolchanger unit is looked up first since it decides how this tool is keyed
         if self.tc_unit_name:
             tc_str = f"AFC_Toolchanger {self.tc_unit_name}"
             self.tc_unit_obj = self.printer.lookup_object(tc_str, None)
@@ -1069,13 +1069,13 @@ class AFCExtruder:
         """
         Helper function to easily detect if a toolhead is on the shuttle or not. This function is
         for toolchangers and will return True for single toolhead printers. When a toolchanger
-        unit is attached, its backend decides.
+        unit is attached, the unit decides.
 
         :return bool: True if the tool is on the shuttle. Always returns True for single
                       toolhead printers.
         """
         if self.tc_unit_obj is not None:
-            return self.tc_unit_obj.backend.is_on_head(self)
+            return self.tc_unit_obj.is_on_head(self)
         return self.detect_on_shuttle()
 
     def detect_on_shuttle(self) -> bool:

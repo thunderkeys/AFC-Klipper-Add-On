@@ -4,20 +4,20 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-# Toolchanger backend for the Bondtech INDX. All INDX tools share one klipper extruder (the Smart
-# Head), tool changes are done by the vendored INDX macros, and the tool on the head is read from
-# INDX's `active_tool` save_variable.
+# Toolchanger unit for the Bondtech INDX, used for `[AFC_Toolchanger]` with `backend: indx`. All
+# INDX tools share one klipper extruder (the Smart Head), tool changes are done by the vendored
+# INDX macros, and the tool on the head is read from INDX's `active_tool` save_variable.
 
 from __future__ import annotations
 
 from configparser import Error as error
 from typing import TYPE_CHECKING, Any, Optional
 
-from extras.AFC_toolchanger_backend import ToolchangerBackend
+from extras.AFC_Toolchanger import AfcToolchanger
 
 if TYPE_CHECKING:
+    from configfile import ConfigWrapper
     from gcode import GCodeCommand
-    from extras.AFC_Toolchanger import AfcToolchanger
     from extras.AFC_extruder import AFCExtruder
     from extras.AFC_lane import AFCLane
 
@@ -26,20 +26,18 @@ INDX_CHANGE_CMD = "INDX_CHANGE_TOOL"
 INDX_PARK_CMD = "PARK_TOOL"
 
 
-class IndxBackend(ToolchangerBackend):
+class AfcIndx(AfcToolchanger):
     """
-    Backend that drives the vendored INDX macros.
+    Toolchanger unit that drives the vendored INDX macros.
     """
-    name = "indx"
     shared_extruder = True
     heats_on_pickup = True
 
-    def __init__(self, unit: AfcToolchanger) -> None:
+    def __init__(self, config: ConfigWrapper) -> None:
         """
-        :param unit: AFC_Toolchanger unit that owns this backend
+        :param config: AFC_Toolchanger config section
         """
-        super().__init__(unit)
-        self.printer = unit.printer
+        super().__init__(config)
         self.save_vars_obj: Any = None
         self.positions_macro: Any = None
         # Set while AFC is driving a change so the macro hook does not resync mid change
@@ -56,13 +54,15 @@ class IndxBackend(ToolchangerBackend):
 
         :return list: AFC_extruder objects attached to this unit
         """
-        return [tool for tool in self.afc.tools.values() if tool.tc_unit_obj is self.unit]
+        return [tool for tool in self.afc.tools.values() if tool.tc_unit_obj is self]
 
     def handle_ready(self) -> None:
         """
-        Resolves save_variables and the INDX macros, then validates tool config.
+        Klippy ready callback, resolves save_variables and the INDX macros, then validates tool
+        config.
         """
-        unit_name = f"AFC_Toolchanger {self.unit}"
+        super().handle_ready()
+        unit_name = " ".join(self.full_name)
         self.save_vars_obj = self.printer.lookup_object("save_variables", None)
         if self.save_vars_obj is None:
             error_str = (f"[{unit_name}] backend: indx requires a [save_variables] section, "
@@ -175,7 +175,7 @@ class IndxBackend(ToolchangerBackend):
             return 0.0
         return temp
 
-    def select(self, extruder: AFCExtruder, target_temp: Optional[float]=None) -> bool:
+    def select_tool(self, extruder: AFCExtruder, target_temp: Optional[float]=None) -> bool:
         """
         Picks up a tool with INDX_CHANGE_TOOL, heating it to target_temp after pickup.
 
@@ -189,7 +189,7 @@ class IndxBackend(ToolchangerBackend):
             cmd += f" TEMP={target_temp:.1f}"
         return self._run_change(cmd, extruder)
 
-    def unselect(self, extruder: Optional[AFCExtruder]) -> bool:
+    def unselect_tool(self, extruder: Optional[AFCExtruder]) -> bool:
         """
         Parks the tool on the head with PARK_TOOL.
 

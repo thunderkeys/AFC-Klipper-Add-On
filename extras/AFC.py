@@ -2961,12 +2961,12 @@ class afc:
         else:
             extruder = self.toolhead.get_extruder()
 
-        shared_backend = self.function.get_shared_backend()
-        if (shared_backend is not None
+        hotend_changer = self.function.get_hotend_changer()
+        if (hotend_changer is not None
             and (t_tool is None
                  or t_tool.shared_extruder)):
             cmd_name = "M109" if wait else "M104"
-            filtered = shared_backend.filter_heat(t_tool, temp, cmd_name)
+            filtered = hotend_changer.filter_heat(t_tool, temp, cmd_name)
             if filtered is None:
                 return
             if filtered != temp:

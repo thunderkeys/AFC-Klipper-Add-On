@@ -16,6 +16,7 @@ from extras.AFC_prep import afcPrep
 from tests.conftest import (MockAFC, MockConfig, MockGCodeCommand, MockLogger, MockPrinter,
                             MockReactor)
 from tests.test_AFC_Toolchanger import _make_toolchanger
+from tests.test_AFC_indx import _make_unit as _make_afc_indx
 from tests.test_AFC_lane import _make_real_afc_lane
 
 
@@ -38,8 +39,8 @@ def _make_tool(printer, name, values=None):
 
 
 def _make_indx_unit(printer, name="INDX"):
-    """Real AfcToolchanger with backend: indx registered on `printer`."""
-    unit = _make_toolchanger(values={"backend": "indx"})
+    """Real AfcIndx registered on `printer`."""
+    unit = _make_afc_indx()
     printer._objects[f"AFC_Toolchanger {name}"] = unit
     return unit
 
@@ -102,7 +103,7 @@ class TestAFCExtruderSharedExtruder:
     def test_unit_with_shared_extruder(self):
         printer, _ = _make_printer()
         tool = _make_tool(printer, "tool0", {"extruder_name": "extruder"})
-        tool.tc_unit_obj = _make_toolchanger(values={"backend": "indx"})
+        tool.tc_unit_obj = _make_afc_indx()
         assert tool.shared_extruder is True
 
 
@@ -120,7 +121,7 @@ class TestAFCExtruderHeatsOnPickup:
     def test_unit_with_heats_on_pickup(self):
         printer, _ = _make_printer()
         tool = _make_tool(printer, "tool0", {"extruder_name": "extruder"})
-        tool.tc_unit_obj = _make_toolchanger(values={"backend": "indx"})
+        tool.tc_unit_obj = _make_afc_indx()
         assert tool.heats_on_pickup is True
 
 
@@ -133,7 +134,7 @@ class TestAFCExtruderToolKey:
     def test_shared_tool_uses_afc_name(self):
         printer, _ = _make_printer()
         tool = _make_tool(printer, "tool2", {"extruder_name": "extruder"})
-        tool.tc_unit_obj = _make_toolchanger(values={"backend": "indx"})
+        tool.tc_unit_obj = _make_afc_indx()
         assert tool.tool_key == "tool2"
 
 
@@ -180,7 +181,7 @@ class TestAFCExtruderRegisterTool:
     def test_shared_tools_in_different_units(self):
         """Same extruder and both shared, but a different unit alone is rejected."""
         afc, t0, t1 = self._shared_pair()
-        t1.tc_unit_obj = _make_toolchanger(values={"backend": "indx"})
+        t1.tc_unit_obj = _make_afc_indx()
         t0._register_tool()
         with pytest.raises(KlipperError) as exc:
             t1._register_tool()
@@ -193,7 +194,7 @@ class TestAFCExtruderRegisterTool:
         """Same unit object (None) but not shared alone is rejected."""
         printer, afc = _make_printer()
         shared = _make_shared_tool(printer, "tool0", 0)
-        shared.tc_unit_obj = _make_toolchanger(values={"backend": "indx"})
+        shared.tc_unit_obj = _make_afc_indx()
         regular = _make_tool(printer, "extruder")
         shared._register_tool()
         with pytest.raises(KlipperError) as exc:
@@ -206,7 +207,7 @@ class TestAFCExtruderRegisterTool:
         printer, afc = _make_printer()
         regular = _make_tool(printer, "extruder")
         shared = _make_shared_tool(printer, "tool0", 0)
-        shared.tc_unit_obj = _make_toolchanger(values={"backend": "indx"})
+        shared.tc_unit_obj = _make_afc_indx()
         regular._register_tool()
         with pytest.raises(KlipperError):
             shared._register_tool()
@@ -217,7 +218,7 @@ class TestAFCExtruderRegisterTool:
         printer, afc = _make_printer()
         e1 = _make_tool(printer, "e1", {"extruder_name": "extruder1"})
         shared = _make_shared_tool(printer, "tool0", 0)
-        shared.tc_unit_obj = _make_toolchanger(values={"backend": "indx"})
+        shared.tc_unit_obj = _make_afc_indx()
         e1._register_tool()
         shared._register_tool()
         assert afc.tools == {"extruder1": e1, "tool0": shared}
@@ -252,13 +253,13 @@ class TestAFCExtruderHandleConnect:
 
 class TestAFCExtruderOnShuttle:
     @pytest.mark.parametrize("on_head", [True, False])
-    def test_unit_backend_decides(self, on_head):
+    def test_unit_decides(self, on_head):
         printer, _ = _make_printer()
         tool = _make_tool(printer, "tool0", {"extruder_name": "extruder"})
         tool.tc_unit_obj = MagicMock()
-        tool.tc_unit_obj.backend.is_on_head.return_value = on_head
+        tool.tc_unit_obj.is_on_head.return_value = on_head
         assert tool.on_shuttle() is on_head
-        tool.tc_unit_obj.backend.is_on_head.assert_called_once_with(tool)
+        tool.tc_unit_obj.is_on_head.assert_called_once_with(tool)
 
     def test_without_unit_uses_detection(self):
         printer, _ = _make_printer()
@@ -280,13 +281,13 @@ class TestAFCExtruderDetectOnShuttle:
         tool.tc_unit_name = "Tools"
         assert tool.detect_on_shuttle() is True
 
-    def test_ignores_backend(self):
+    def test_ignores_unit(self):
         printer, _ = _make_printer()
         tool = _make_tool(printer, "extruder")
         tool.tc_unit_obj = MagicMock()
-        tool.tc_unit_obj.backend.is_on_head.return_value = False
+        tool.tc_unit_obj.is_on_head.return_value = False
         assert tool.detect_on_shuttle() is True
-        tool.tc_unit_obj.backend.is_on_head.assert_not_called()
+        tool.tc_unit_obj.is_on_head.assert_not_called()
 
     @pytest.mark.parametrize("state,expected", [("ACTIVATE", True), ("IDLE", False)])
     def test_park_detector(self, state, expected):
@@ -347,13 +348,13 @@ class TestAfcFunctionGetCurrentExtruder:
         unit = MagicMock()
         t0 = _tool_mock("tool0", shared=True, unit=unit)
         t1 = _tool_mock("tool1", shared=True, unit=unit)
-        unit.backend.active_tool.return_value = t1
+        unit.active_tool.return_value = t1
         func = self._func({"tool0": t0, "tool1": t1})
         assert func.get_current_extruder() == "tool1"
 
     def test_shared_tool_empty_head(self):
         unit = MagicMock()
-        unit.backend.active_tool.return_value = None
+        unit.active_tool.return_value = None
         func = self._func({"tool0": _tool_mock("tool0", shared=True, unit=unit)})
         assert func.get_current_extruder() is None
 
@@ -363,14 +364,14 @@ class TestAfcFunctionGetCurrentExtruder:
         func = self._func({"tool0": _tool_mock("tool0", shared=True, unit=unit)},
                           active_extruder="extruder5")
         assert func.get_current_extruder() is None
-        unit.backend.active_tool.assert_not_called()
+        unit.active_tool.assert_not_called()
 
     def test_not_shared_not_matched(self):
         """Not shared alone skips the shared lookup."""
         unit = MagicMock()
         func = self._func({"e1": _tool_mock("e1", shared=False, unit=unit)})
         assert func.get_current_extruder() is None
-        unit.backend.active_tool.assert_not_called()
+        unit.active_tool.assert_not_called()
 
     def test_shared_without_unit_not_matched(self):
         """No unit object alone skips the shared lookup."""
@@ -378,26 +379,26 @@ class TestAfcFunctionGetCurrentExtruder:
         assert func.get_current_extruder() is None
 
 
-class TestAfcFunctionGetSharedBackend:
+class TestAfcFunctionGetHotendChanger:
     def _func(self, tools):
         afc = _make_real_afc()
         afc.tools = tools
         return _make_func(afc)
 
-    def test_returns_backend(self):
+    def test_returns_unit(self):
         unit = MagicMock()
         func = self._func({"e1": _tool_mock("e1"),
                            "tool0": _tool_mock("tool0", shared=True, unit=unit)})
-        assert func.get_shared_backend() is unit.backend
+        assert func.get_hotend_changer() is unit
 
     def test_none_without_shared_tools(self):
         func = self._func({"e1": _tool_mock("e1", unit=MagicMock())})
-        assert func.get_shared_backend() is None
+        assert func.get_hotend_changer() is None
 
     def test_shared_without_unit_skipped(self):
-        """No unit object alone keeps a shared tool from providing a backend."""
+        """No unit object alone keeps a shared tool from providing a hotend changer."""
         func = self._func({"tool0": _tool_mock("tool0", shared=True, unit=None)})
-        assert func.get_shared_backend() is None
+        assert func.get_hotend_changer() is None
 
 
 class TestAfcFunctionGetTool:
@@ -514,11 +515,11 @@ class TestAfcChangeTool:
                                        ("info", "tool1 heated and ready to print")]
 
 
-def _m109_afc(backend, t_lane=None, current_temp=20.0):
+def _m109_afc(changer, t_lane=None, current_temp=20.0):
     afc = _make_real_afc()
     afc.function.get_current_extruder_obj.return_value = None
     afc.function.get_lane_by_map.return_value = t_lane
-    afc.function.get_shared_backend.return_value = backend
+    afc.function.get_hotend_changer.return_value = changer
     heater = MagicMock()
     heater.get_temp.return_value = (current_temp, 0.0)
     afc.toolhead.get_extruder.return_value.get_heater.return_value = heater
@@ -537,55 +538,55 @@ def _setting(lane, temp):
     return ("debug", f"Setting temperature for {lane.extruder_obj} to {temp}")
 
 
-def _indx_backend(active):
+def _indx_unit(active):
     from tests.test_AFC_indx import _make_indx
-    unit, backend, _, tools = _make_indx(active=active)
+    unit, _, tools = _make_indx(active=active)
     for tool in tools:
         tool.shared_extruder = True
-    return unit, backend, tools
+    return unit, tools
 
 
 class TestAfcM109:
     def test_hotend_changer_heats_tool_on_head(self):
-        _, backend, _ = _indx_backend(active=0)
-        afc, heaters, heater = _m109_afc(backend)
+        unit, _ = _indx_unit(active=0)
+        afc, heaters, heater = _m109_afc(unit)
         afc.cmd_AFC_M104(MockGCodeCommand(params={"S": 210.0}))
         assert heaters.set_temperature.call_args_list[-1].args == (heater, 210.0, False)
         assert afc.logger.messages == [RAW_CMD, DONE]
 
     def test_hotend_changer_empty_head_skips(self):
-        _, backend, _ = _indx_backend(active=-1)
-        afc, heaters, _ = _m109_afc(backend)
+        unit, _ = _indx_unit(active=-1)
+        afc, heaters, _ = _m109_afc(unit)
         afc.cmd_AFC_M109(MockGCodeCommand(params={"S": 210.0}))
         heaters.set_temperature.assert_not_called()
         assert afc.logger.messages == [RAW_CMD]
 
     def test_t_for_parked_tool_skips(self):
-        _, backend, tools = _indx_backend(active=0)
-        afc, heaters, _ = _m109_afc(backend, t_lane=tools[1].tc_lane)
+        unit, tools = _indx_unit(active=0)
+        afc, heaters, _ = _m109_afc(unit, t_lane=tools[1].tc_lane)
         afc.cmd_AFC_M104(MockGCodeCommand(params={"S": 210.0, "T": 1}))
         heaters.set_temperature.assert_not_called()
         assert afc.logger.messages == [RAW_CMD, _setting(tools[1].tc_lane, 210.0)]
 
     def test_t_for_tool_on_head_heats_and_waits(self):
-        _, backend, tools = _indx_backend(active=1)
-        afc, heaters, heater = _m109_afc(backend, t_lane=tools[1].tc_lane)
+        unit, tools = _indx_unit(active=1)
+        afc, heaters, heater = _m109_afc(unit, t_lane=tools[1].tc_lane)
         afc.cmd_AFC_M109(MockGCodeCommand(params={"S": 215.0, "T": 1}))
         assert heaters.set_temperature.call_args_list[-1].args == (heater, 215.0, True)
         assert afc.logger.messages == [RAW_CMD, _setting(tools[1].tc_lane, 215.0), DONE]
 
     def test_no_heat_tool_held_at_zero_without_wait(self):
-        unit, backend, _ = _indx_backend(active=2)
+        unit, _ = _indx_unit(active=2)
         unit.printer._objects["gcode_macro TOOL_POSITIONS"].variables["no_heat_tools"] = [2]
-        afc, heaters, heater = _m109_afc(backend)
+        afc, heaters, heater = _m109_afc(unit)
         afc.cmd_AFC_M109(MockGCodeCommand(params={"S": 215.0}))
         assert heaters.set_temperature.call_args_list[-1].args == (heater, 0.0, False)
         assert afc.logger.messages == [RAW_CMD, DONE]
 
     def test_unchanged_temp_still_waits(self):
         """filtered == temp alone keeps the M109 wait."""
-        _, backend, _ = _indx_backend(active=0)
-        afc, heaters, heater = _m109_afc(backend)
+        unit, _ = _indx_unit(active=0)
+        afc, heaters, heater = _m109_afc(unit)
         afc.cmd_AFC_M109(MockGCodeCommand(params={"S": 215.0}))
         assert heaters.set_temperature.call_args_list[-1].args == (heater, 215.0, True)
         assert afc.logger.messages == [RAW_CMD, DONE]
@@ -598,12 +599,12 @@ class TestAfcM109:
 
     def test_t_for_regular_tool_bypasses_filter(self):
         """A T for a tool that does not share the extruder alone skips the filter."""
-        backend = MagicMock()
+        changer = MagicMock()
         lane = MagicMock()
         lane.extruder_obj.shared_extruder = False
-        afc, heaters, heater = _m109_afc(backend, t_lane=lane)
+        afc, heaters, heater = _m109_afc(changer, t_lane=lane)
         afc.cmd_AFC_M104(MockGCodeCommand(params={"S": 205.0, "T": 3}))
-        backend.filter_heat.assert_not_called()
+        changer.filter_heat.assert_not_called()
         assert heaters.set_temperature.call_args_list[-1].args == (heater, 205.0, False)
         assert afc.logger.messages == [RAW_CMD, _setting(lane, 205.0), DONE]
 

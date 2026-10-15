@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from extras.AFC_lane import AFCLane, MoveDirection, AFCHomingPoints
     from extras.AFC_functions import afcFunction
     from extras.AFC_stepper import AFCExtruderStepper
+    from extras.AFC_extruder import AFCExtruder
 
 try: from extras.AFC_utils import ERROR_STR
 except: raise error("Error when trying to import AFC_utils.ERROR_STR\n{trace}".format(trace=traceback.format_exc()))
@@ -35,35 +36,27 @@ except: raise error(ERROR_STR.format(import_lib="AFC", trace=traceback.format_ex
 try: from extras.AFC_lane import AFCMoveWarning, SpeedMode, AssistActive
 except: raise error(ERROR_STR.format(import_lib="AFC_lane", trace=traceback.format_exc()))
 
-try: from extras.AFC_toolchanger_backend import ToolchangerBackend, KtcBackend
-except:
-    err_str = ERROR_STR.format(import_lib="AFC_toolchanger_backend", trace=traceback.format_exc())
-    raise error(err_str)
-
-try: from extras.AFC_indx import IndxBackend
-except: raise error(ERROR_STR.format(import_lib="AFC_indx", trace=traceback.format_exc()))
-
-BACKENDS: dict[str, type[ToolchangerBackend]] = {
-    KtcBackend.name: KtcBackend,
-    IndxBackend.name: IndxBackend,
-}
-
 
 class AfcToolchanger(afcUnit):
+    """
+    Toolchanger unit for klipper-toolchanger (KTC) and setups using custom swap/unselect macros
+    (U1). Other toolchangers subclass this and override the tool hooks, see `load_config_prefix`.
+
+    `shared_extruder` is True for hotend changers (e.g. INDX): toolchangers that swap only the
+    hotend while the extruder and heater stay on the head, so every tool drives the same klipper
+    extruder and tool identity cannot be derived from the active klipper extruder.
+    `heats_on_pickup` is True when the incoming tool cannot be preheated and the outgoing tool
+    cannot stay hot.
+    """
+    shared_extruder: bool = False
+    heats_on_pickup: bool = False
+
     def __init__(self, config: ConfigWrapper) -> None:
         super().__init__(config)
         self.type = config.get("type", "Toolchanger")
         self.logo       = '<span class=success--text>Toolchanger Ready\n</span>'
         self.logo_error = '<span class=error--text>Toolchanger Not Ready</span>\n'
         self.functions: afcFunction = self.printer.load_object(config, 'AFC_functions')
-
-        backend_name = config.get("backend", "ktc").lower()
-        backend_cls = BACKENDS.get(backend_name)
-        if backend_cls is None:
-            error_str = (f"[{' '.join(self.full_name)}] invalid backend '{backend_name}', "
-                         f"valid options: {', '.join(sorted(BACKENDS))}")
-            raise error(error_str)
-        self.backend: ToolchangerBackend = backend_cls(self)
 
         self.functions.register_commands(self.afc.show_macros, "AFC_SELECT_TOOL",
                                          self.cmd_AFC_SELECT_TOOL, self.cmd_AFC_SELECT_TOOL_help,
@@ -192,7 +185,7 @@ class AfcToolchanger(afcUnit):
         self.afc.current_state = State.TOOL_DOCK
         if current_extruder:
             current_extruder.status = State.TOOL_DOCK
-        if not self.backend.unselect(current_extruder):
+        if not self.unselect_tool(current_extruder):
             self.afc.current_state = State.IDLE
             if current_extruder:
                 current_extruder.status = State.IDLE
@@ -217,12 +210,71 @@ class AfcToolchanger(afcUnit):
             current_extruder.status = State.IDLE
 
 
-    def handle_ready(self) -> None:
+    def select_tool(self, extruder: AFCExtruder, target_temp: Optional[float]=None) -> bool:
         """
-        Klippy ready callback, lets the backend validate and resolve its objects.
+        Picks up the tool for the given extruder by running its custom swap macro, or KTC
+        SELECT_TOOL using the index parsed from the klipper extruder name.
+
+        :param extruder: AFC_extruder to select
+        :param target_temp: Temperature for the incoming tool, unused since KTC tools have their
+            own heaters
+        :return bool: True if the tool was picked up, KTC failures raise
         """
-        super().handle_ready()
-        self.backend.handle_ready()
+        name = extruder.th_extruder_name
+        tool_index = 0 if name == "extruder" else int(name.replace("extruder", ""))
+
+        if extruder.custom_tool_swap:
+            self.logger.info(f"Running custom select: {extruder.custom_tool_swap}")
+            self.afc.gcode.run_script_from_command(f"{extruder.custom_tool_swap}")
+        else:
+            self.afc.gcode.run_script_from_command(f"SELECT_TOOL T={tool_index}")
+        return True
+
+    def unselect_tool(self, extruder: Optional[AFCExtruder]) -> bool:
+        """
+        Parks the tool on the head by running its custom unselect macro, or KTC UNSELECT_TOOL.
+
+        :param extruder: AFC_extruder currently on the head, None if unknown
+        :return bool: True if the tool was parked, KTC failures raise
+        """
+        if (extruder
+            and extruder.custom_unselect):
+            self.logger.info(f"Running custom unselect: {extruder.custom_unselect}")
+            self.afc.gcode.run_script_from_command(f"{extruder.custom_unselect}")
+        else:
+            self.afc.gcode.run_script_from_command("UNSELECT_TOOL")
+        return True
+
+    def is_on_head(self, extruder: AFCExtruder) -> bool:
+        """
+        Reports whether the given tool is on the shuttle using KTC tool detection or the U1 park
+        detector.
+
+        :param extruder: AFC_extruder to check
+        :return bool: True if the tool is on the shuttle
+        """
+        return extruder.detect_on_shuttle()
+
+    def filter_heat(self, tool: Optional[AFCExtruder], temp: float, cmd: str) -> Optional[float]:
+        """
+        Adjusts an M104/M109 request for hotend changers with a shared heater. Left unchanged
+        here since KTC tools have their own heaters.
+
+        :param tool: Tool targeted by the T parameter, None when no T was given
+        :param temp: Requested temperature
+        :param cmd: Command name for console messages
+        :return float|None: Temperature to apply, None to skip the request entirely
+        """
+        return temp
+
+    def active_tool(self) -> Optional[AFCExtruder]:
+        """
+        Tool on the head when the toolchanger tracks it independently of the active klipper
+        extruder. Only meaningful for hotend changers.
+
+        :return AFCExtruder|None: Tool on the head, None if empty or not tracked
+        """
+        return None
 
     def tool_swap(self, lane: AFCLane, set_start_time: bool=True,
                   target_temp: Optional[float]=None) -> bool:
@@ -235,7 +287,7 @@ class AfcToolchanger(afcUnit):
 
         :param lane: The lane object whose extruder/toolhead should be activated.
         :param set_start_time: Set true to set a starting time for afcDeltaTime.
-        :param target_temp: Temperature for the incoming tool, used by backends that heat on
+        :param target_temp: Temperature for the incoming tool, used by toolchangers that heat on
             pickup
         :return bool: True if the tool swap succeeded
         """
@@ -256,7 +308,7 @@ class AfcToolchanger(afcUnit):
             self.afc.last_gcode_position[i] -= self.afc.gcode_move.base_position[i]
         # Perform a tool swap by selecting the appropriate extruder based on the lane's extruder object.
         self.afc.afcDeltaTime.log_with_time("Performing tool swap")
-        selected = self.backend.select(lane.extruder_obj, target_temp)
+        selected = self.select_tool(lane.extruder_obj, target_temp)
         lane.extruder_obj.next_pickup = False
         if not selected:
             lane.extruder_obj.status = self.afc.current_state = State.IDLE
@@ -334,8 +386,25 @@ class AfcToolchanger(afcUnit):
         if not success:
             raise gcmd.error(error_string)
 
-def load_config_prefix(config: ConfigWrapper):
-    return AfcToolchanger(config)
+def load_config_prefix(config: ConfigWrapper) -> AfcToolchanger:
+    """
+    Builds the toolchanger unit class matching the `backend` option.
 
-def load_config(config: ConfigWrapper):
+    :param config: AFC_Toolchanger config section
+    :return AfcToolchanger: Toolchanger unit for the configured backend
+    """
+    backend = config.get("backend", "ktc").lower()
+    if backend == "ktc":
+        return AfcToolchanger(config)
+
+    if backend == "indx":
+        # Imported here since AFC_indx subclasses AfcToolchanger from this module
+        try: from extras.AFC_indx import AfcIndx
+        except: raise error(ERROR_STR.format(import_lib="AFC_indx", trace=traceback.format_exc()))
+        return AfcIndx(config)
+
+    error_str = f"[{config.get_name()}] invalid backend '{backend}', valid options: indx, ktc"
+    raise error(error_str)
+
+def load_config(config: ConfigWrapper) -> AfcToolchanger:
     return load_config_prefix(config)
