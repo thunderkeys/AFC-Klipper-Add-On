@@ -564,6 +564,179 @@ class TestCmdAFCUnselectTool:
         tool.afc.spool.set_active_spool.assert_called_once_with('')
 
 
+# ── tools / tool_lanes ───────────────────────────────────────────────────────
+
+def _make_tc_tool(unit, name):
+    tool = MagicMock()
+    tool.name = name
+    tool.tc_unit_obj = unit
+    tool.tc_lane = MagicMock()
+    unit.afc.tools[name] = tool
+    return tool
+
+
+def _make_tc_lane(unit, name, tool):
+    lane = MagicMock()
+    lane.name = name
+    lane.extruder_obj = tool
+    unit.afc.lanes[name] = lane
+    return lane
+
+
+class TestAfcToolchangerTools:
+    def test_returns_only_tools_of_this_unit(self):
+        unit = _make_toolchanger()
+        tools = [_make_tc_tool(unit, "tool0"), _make_tc_tool(unit, "tool1")]
+        other = _make_tc_tool(unit, "other")
+        other.tc_unit_obj = MagicMock()
+        assert unit.tools() == tools
+
+    def test_empty_when_no_tools(self):
+        assert _make_toolchanger().tools() == []
+
+
+class TestAfcToolchangerToolLanes:
+    def test_unit_lanes_on_unit_tools(self):
+        unit = _make_toolchanger()
+        tool = _make_tc_tool(unit, "tool0")
+        lane = _make_tc_lane(unit, "lane1", tool)
+        assert unit.tool_lanes() == [lane]
+
+    def test_standalone_lanes_left_out(self):
+        unit = _make_toolchanger()
+        tool = _make_tc_tool(unit, "tool0")
+        unit.afc.lanes["tool0"] = tool.tc_lane
+        tool.tc_lane.extruder_obj = tool
+        assert unit.tool_lanes() == []
+
+    def test_lanes_on_other_tools_left_out(self):
+        unit = _make_toolchanger()
+        _make_tc_tool(unit, "tool0")
+        _make_tc_lane(unit, "lane1", MagicMock())
+        assert unit.tool_lanes() == []
+
+
+# ── handle_ready / _check_hubs ───────────────────────────────────────────────
+
+def _make_hub_lane(unit, name, tool, hub="hub0", direct=False):
+    lane = _make_tc_lane(unit, name, tool)
+    lane.is_direct_hub.return_value = direct
+    if hub is None:
+        lane.hub_obj = None
+    else:
+        lane.hub_obj.name = hub
+    return lane
+
+
+class TestAfcToolchangerHandleReady:
+    def test_sorts_lanes(self):
+        unit = _make_toolchanger()
+        unit.lanes = {"lane10": "b", "lane2": "a"}
+        unit.handle_ready()
+        assert list(unit.lanes) == ["lane2", "lane10"]
+
+    def test_checks_hubs(self):
+        unit = _make_toolchanger()
+        _make_hub_lane(unit, "lane0", _make_tc_tool(unit, "tool0"))
+        _make_hub_lane(unit, "lane1", _make_tc_tool(unit, "tool1"))
+        with pytest.raises(configparser.Error):
+            unit.handle_ready()
+
+
+class TestAfcToolchangerCheckHubs:
+    def test_no_lanes_passes(self):
+        _make_toolchanger()._check_hubs()
+
+    def test_hub_feeding_two_unit_tools(self):
+        unit = _make_toolchanger()
+        _make_hub_lane(unit, "lane0", _make_tc_tool(unit, "tool0"))
+        _make_hub_lane(unit, "lane1", _make_tc_tool(unit, "tool1"))
+        with pytest.raises(configparser.Error) as exc:
+            unit._check_hubs()
+        assert str(exc.value) == ("[AFC_hub hub0] feeds lanes on tool0, tool1. A hub on a "
+                                  "toolchanger can only feed one tool.")
+
+    def test_hub_feeding_unit_and_other_tool(self):
+        unit = _make_toolchanger()
+        other = MagicMock()
+        other.name = "extruder"
+        _make_hub_lane(unit, "lane0", _make_tc_tool(unit, "tool0"))
+        _make_hub_lane(unit, "lane1", other)
+        with pytest.raises(configparser.Error) as exc:
+            unit._check_hubs()
+        assert str(exc.value) == ("[AFC_hub hub0] feeds lanes on extruder, tool0. A hub on a "
+                                  "toolchanger can only feed one tool.")
+
+    def test_hub_feeding_two_other_tools_passes(self):
+        unit = _make_toolchanger()
+        for i in range(2):
+            other = MagicMock()
+            other.name = f"extruder{i}"
+            _make_hub_lane(unit, f"lane{i}", other)
+        unit._check_hubs()
+
+    def test_hub_feeding_one_tool_passes(self):
+        unit = _make_toolchanger()
+        tool = _make_tc_tool(unit, "tool0")
+        _make_hub_lane(unit, "lane0", tool)
+        _make_hub_lane(unit, "lane1", tool)
+        _make_hub_lane(unit, "lane2", _make_tc_tool(unit, "tool1"), hub="hub1")
+        unit._check_hubs()
+
+    def test_direct_hub_lanes_not_grouped(self):
+        unit = _make_toolchanger()
+        _make_hub_lane(unit, "lane0", _make_tc_tool(unit, "tool0"), direct=True)
+        _make_hub_lane(unit, "lane1", _make_tc_tool(unit, "tool1"), direct=True)
+        unit._check_hubs()
+
+    def test_lanes_without_hub_not_grouped(self):
+        unit = _make_toolchanger()
+        _make_hub_lane(unit, "lane0", _make_tc_tool(unit, "tool0"), hub=None)
+        _make_hub_lane(unit, "lane1", _make_tc_tool(unit, "tool1"), hub=None)
+        unit._check_hubs()
+
+
+# ── pickup_temp ──────────────────────────────────────────────────────────────
+
+class TestAfcToolchangerPickupTemp:
+    def _make(self, loaded=None, temps=(230.0, False)):
+        unit = _make_toolchanger()
+        tool = _make_tc_tool(unit, "tool0")
+        tool.lane_loaded = loaded
+        lane = _make_tc_lane(unit, "lane0", tool)
+        _make_tc_lane(unit, "lane1", tool)
+        unit.afc._get_default_material_temps = MagicMock(return_value=temps)
+        return unit, tool, lane
+
+    def test_empty_tool_keeps_target_temp(self):
+        unit, _, lane = self._make()
+        assert unit.pickup_temp(lane, 210.0) == 210.0
+        unit.afc._get_default_material_temps.assert_not_called()
+        assert unit.afc.logger.messages == []
+
+    def test_tool_holding_target_lane_keeps_target_temp(self):
+        unit, _, lane = self._make(loaded="lane0")
+        assert unit.pickup_temp(lane, 210.0) == 210.0
+        unit.afc._get_default_material_temps.assert_not_called()
+
+    def test_unknown_loaded_lane_keeps_target_temp(self):
+        unit, _, lane = self._make(loaded="missing")
+        assert unit.pickup_temp(lane, 210.0) == 210.0
+        unit.afc._get_default_material_temps.assert_not_called()
+
+    def test_tool_holding_other_lane_uses_its_temp(self):
+        unit, tool, lane = self._make(loaded="lane1")
+        assert unit.pickup_temp(lane, 210.0) == 230.0
+        unit.afc._get_default_material_temps.assert_called_once_with(
+            unit.afc.lanes["lane1"], tool.get_heater.return_value)
+        assert unit.afc.logger.messages == [("debug", "Picking up tool0 at 230 to unload lane1")]
+
+    def test_fallback_temp_keeps_target_temp(self):
+        unit, _, lane = self._make(loaded="lane1", temps=(205.0, True))
+        assert unit.pickup_temp(lane, None) is None
+        assert unit.afc.logger.messages == []
+
+
 # ── tool_swap ────────────────────────────────────────────────────────────────
 
 def _make_toolchanger_for_tool_swap():
@@ -591,6 +764,31 @@ def _make_lane_for_tool_swap(extruder_name="extruder1"):
 
 
 class TestToolSwap:
+    def test_heats_on_pickup_uses_pickup_temp(self):
+        tool = _make_toolchanger_for_tool_swap()
+        tool.function.get_current_extruder_obj.return_value = None
+        tool.heats_on_pickup = True
+        tool.pickup_temp = MagicMock(return_value=230.0)
+        tool.select_tool = MagicMock(return_value=True)
+        lane = _make_lane_for_tool_swap()
+
+        tool.tool_swap(lane, target_temp=210.0)
+
+        tool.pickup_temp.assert_called_once_with(lane, 210.0)
+        tool.select_tool.assert_called_once_with(lane.extruder_obj, 230.0)
+
+    def test_own_heaters_keep_target_temp(self):
+        tool = _make_toolchanger_for_tool_swap()
+        tool.function.get_current_extruder_obj.return_value = None
+        tool.pickup_temp = MagicMock(return_value=230.0)
+        tool.select_tool = MagicMock(return_value=True)
+        lane = _make_lane_for_tool_swap()
+
+        tool.tool_swap(lane, target_temp=210.0)
+
+        tool.pickup_temp.assert_not_called()
+        tool.select_tool.assert_called_once_with(lane.extruder_obj, 210.0)
+
     def test_lane_extruder_status_pickup_and_next_pickup_during_swap(self):
         """lane.extruder_obj.status is TOOL_PICKUP and next_pickup is True
         while the SELECT_TOOL command is being issued."""

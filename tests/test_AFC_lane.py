@@ -4230,3 +4230,17 @@ class TestPrepCallback:
 
         lane_b.handle_prep_runout(20.0, False)
         lane_b.set_unloaded.assert_called_once()
+
+
+# ── deactivate ───────────────────────────────────────────────────────────────
+
+class TestAFCLaneDeactivate:
+    def test_unsyncs_and_disables_stepper_and_buffer(self):
+        lane = _make_real_afc_lane()
+        order = MagicMock()
+        lane.unsync_to_extruder = order.unsync_to_extruder
+        lane.do_enable = order.do_enable
+        lane.disable_buffer = order.disable_buffer
+        lane.deactivate()
+        assert order.mock_calls == [call.unsync_to_extruder(), call.do_enable(False),
+                                    call.disable_buffer()]

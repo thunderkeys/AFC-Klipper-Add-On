@@ -283,6 +283,10 @@ class AFCExtruder:
                                                                 self.afc.enable_standalone_purge)
         self.standalone_auto_load_unload: bool  = config.getboolean("standalone_auto_load_unload",
                                                                     self.afc.standalone_auto_load_unload)
+        # Per tool overrides of AFC tool_cut/form_tip, None follows AFC.cfg. Hotend changers
+        # like INDX have no cutter on the tool and tip form instead.
+        self.tool_cut: Optional[bool]   = config.getboolean("tool_cut", None)
+        self.form_tip: Optional[bool]   = config.getboolean("form_tip", None)
 
         self.lane_loaded: Optional[str] = None
         self.lanes: Dict                = {}

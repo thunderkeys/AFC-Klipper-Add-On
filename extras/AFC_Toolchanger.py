@@ -70,6 +70,52 @@ class AfcToolchanger(afcUnit):
                                          self.cmd_AFC_SET_TOOLHEAD_LED_help,
                                          self.cmd_AFC_SET_TOOLHEAD_LED_options)
 
+    def handle_ready(self) -> None:
+        """
+        Klippy ready callback, sorts lanes and validates the hubs feeding this unit's tools.
+        """
+        super().handle_ready()
+        self._check_hubs()
+
+    def _check_hubs(self) -> None:
+        """
+        A hub merges its lanes into one path to one tool, so a hub feeding lanes on a tool of this
+        unit can't also feed lanes on another tool.
+        """
+        hub_tools: dict[str, set[str]] = {}
+        for lane in self.afc.lanes.values():
+            if (lane.is_direct_hub()
+                or lane.hub_obj is None):
+                continue
+            hub_tools.setdefault(lane.hub_obj.name, set()).add(lane.extruder_obj.name)
+        unit_tools = {tool.name for tool in self.tools()}
+        for hub_name, tool_names in hub_tools.items():
+            if (len(tool_names) > 1
+                and tool_names & unit_tools):
+                names = ", ".join(sorted(tool_names))
+                error_str = (f"[AFC_hub {hub_name}] feeds lanes on {names}. A hub on a "
+                             "toolchanger can only feed one tool.")
+                raise error(error_str)
+
+    def tools(self) -> list[AFCExtruder]:
+        """
+        Tools that belong to this toolchanger unit.
+
+        :return list: AFC_extruder objects attached to this unit
+        """
+        return [tool for tool in self.afc.tools.values() if tool.tc_unit_obj is self]
+
+    def tool_lanes(self) -> list[AFCLane]:
+        """
+        Unit lanes that feed tools of this toolchanger, standalone tool lanes are left out.
+
+        :return list: Lanes attached to this unit's tools
+        """
+        tools = self.tools()
+        return [lane for lane in self.afc.lanes.values()
+                if lane.extruder_obj in tools
+                and lane is not lane.extruder_obj.tc_lane]
+
     def system_Test(self, cur_lane: AFCLane, delay: float, assignTcmd: str, enable_movement: bool):
         if assignTcmd: self.afc.function.TcmdAssign(cur_lane)
         # Now that a T command is assigned, send lane data to moonraker
@@ -276,6 +322,30 @@ class AfcToolchanger(afcUnit):
         """
         return None
 
+    def pickup_temp(self, lane: AFCLane, target_temp: Optional[float]) -> Optional[float]:
+        """
+        Temperature to pick up the tool of `lane` at, for toolchangers that heat on pickup. When
+        that tool holds another lane it gets unloaded first, so the tool is heated for the loaded
+        lane instead.
+
+        :param lane: Lane whose tool is picked up
+        :param target_temp: Temperature requested for the incoming lane
+        :return float|None: Temperature to pick up at
+        """
+        tool = lane.extruder_obj
+        loaded = None
+        if tool.lane_loaded is not None:
+            loaded = self.afc.lanes.get(tool.lane_loaded)
+        if (loaded is None
+            or loaded is lane):
+            return target_temp
+        temp: float
+        temp, using_min_value = self.afc._get_default_material_temps(loaded, tool.get_heater())
+        if using_min_value:
+            return target_temp
+        self.logger.debug(f"Picking up {tool.name} at {temp:g} to unload {loaded.name}")
+        return temp
+
     def tool_swap(self, lane: AFCLane, set_start_time: bool=True,
                   target_temp: Optional[float]=None) -> bool:
         """
@@ -288,11 +358,14 @@ class AfcToolchanger(afcUnit):
         :param lane: The lane object whose extruder/toolhead should be activated.
         :param set_start_time: Set true to set a starting time for afcDeltaTime.
         :param target_temp: Temperature for the incoming tool, used by toolchangers that heat on
-            pickup
+            pickup (see `pickup_temp`)
         :return bool: True if the tool swap succeeded
         """
         if set_start_time:
             self.afc.afcDeltaTime.set_start_time()
+
+        if self.heats_on_pickup:
+            target_temp = self.pickup_temp(lane, target_temp)
 
         current_extruder = self.function.get_current_extruder_obj()
         if current_extruder:

@@ -93,6 +93,22 @@ def _run_sets_active(unit, save_vars, result=None):
     unit.afc.gcode.run_script_from_command = MagicMock(side_effect=_run)
 
 
+def _make_lane(afc, name, tool, hub="hub0", direct=False):
+    """Unit lane feeding `tool` through `hub` (None for no hub object)."""
+    lane = MagicMock()
+    lane.name = name
+    lane.fullname = f"AFC_lane {name}"
+    lane.extruder_obj = tool
+    lane.is_direct_hub.return_value = direct
+    if hub is None:
+        lane.hub_obj = None
+    else:
+        lane.hub_obj.name = hub
+    afc.lanes[name] = lane
+    return lane
+
+
+
 # ── __init__ ─────────────────────────────────────────────────────────────────
 
 class TestAfcIndxInit:
@@ -127,21 +143,6 @@ class TestAfcIndxInit:
         commands = unit.afc.gcode._commands
         assert commands["AFC_INDX_TOOL_CHANGED"] == unit.cmd_AFC_INDX_TOOL_CHANGED
         assert commands["AFC_INDX_PRE_LATCH"] == unit.cmd_AFC_INDX_PRE_LATCH
-
-
-# ── tools ────────────────────────────────────────────────────────────────────
-
-class TestAfcIndxTools:
-    def test_returns_only_tools_of_this_unit(self):
-        unit, _, tools = _make_indx()
-        other = MagicMock()
-        other.tc_unit_obj = MagicMock()
-        unit.afc.tools["other"] = other
-        assert unit.tools() == tools
-
-    def test_empty_when_no_tools(self):
-        unit, _, _ = _make_indx(n_tools=0)
-        assert unit.tools() == []
 
 
 # ── handle_ready ─────────────────────────────────────────────────────────────
@@ -384,6 +385,119 @@ class TestAfcIndxFilterHeat:
         _macro(unit, "TOOL_POSITIONS").variables["no_heat_tools"] = [2]
         assert unit.filter_heat(None, 220.0, "M104") == 220.0
         assert unit.afc.logger.messages == []
+
+
+# ── _check_lanes ─────────────────────────────────────────────────────────────
+
+class TestAfcIndxCheckLanes:
+    def test_no_lanes_passes(self):
+        unit, _, _ = _make_indx()
+        unit._check_lanes()
+
+    def test_lane_on_no_heat_tool(self):
+        unit, _, tools = _make_indx()
+        _macro(unit, "TOOL_POSITIONS").variables["no_heat_tools"] = [1]
+        _make_lane(unit.afc, "lane1", tools[1])
+        with pytest.raises(KlipperError) as exc:
+            unit._check_lanes()
+        assert str(exc.value) == ("[AFC_lane lane1] feeds T1, but T1 is in INDX "
+                                  "no_heat_tools and can't take filament.")
+
+    def test_lane_on_heated_tool_passes(self):
+        unit, _, tools = _make_indx()
+        _macro(unit, "TOOL_POSITIONS").variables["no_heat_tools"] = [1]
+        _make_lane(unit.afc, "lane0", tools[0])
+        unit._check_lanes()
+
+    def test_runs_from_handle_ready(self):
+        unit, _, tools = _make_indx(ready=False)
+        _macro(unit, "TOOL_POSITIONS").variables["no_heat_tools"] = [0]
+        _make_lane(unit.afc, "lane0", tools[0])
+        with pytest.raises(KlipperError):
+            unit.handle_ready()
+
+
+# ── _check_dock_clearance ────────────────────────────────────────────────────
+
+PARK_WARNING = ("Warning: park_loc_xy Y {y} in _AFC_PARK_VARS is on the dock side of INDX "
+                "clearance_y {c}, a tool on the head can hit the docked tools there.")
+
+
+def _park_position(y):
+    return ("park", "_AFC_PARK_VARS", "park_loc_xy", (100, y), (-99, -99))
+
+
+class TestAfcIndxCheckDockClearance:
+    def _set(self, unit, positions, clearance_y=0.0, dock_dir=None):
+        variables = _macro(unit, "TOOL_POSITIONS").variables
+        if clearance_y is not None:
+            variables["clearance_y"] = clearance_y
+        if dock_dir is not None:
+            variables["dock_dir"] = dock_dir
+        unit.afc.macro_positions = MagicMock(return_value=positions)
+
+    def test_no_clearance_y_skips(self):
+        unit, _, _ = _make_indx()
+        self._set(unit, [_park_position(-50)], clearance_y=None)
+        unit._check_dock_clearance()
+        unit.afc.macro_positions.assert_not_called()
+        assert unit.afc.logger.messages == []
+
+    def test_front_docks_position_on_dock_side(self):
+        unit, _, _ = _make_indx()
+        self._set(unit, [_park_position(-10)])
+        unit._check_dock_clearance()
+        assert unit.afc.logger.messages == [("info", PARK_WARNING.format(y=-10, c=0))]
+
+    def test_front_docks_position_clear(self):
+        unit, _, _ = _make_indx()
+        self._set(unit, [_park_position(10)])
+        unit._check_dock_clearance()
+        assert unit.afc.logger.messages == []
+
+    def test_position_on_clearance_line_passes(self):
+        unit, _, _ = _make_indx()
+        self._set(unit, [_park_position(5)], clearance_y=5.0)
+        unit._check_dock_clearance()
+        assert unit.afc.logger.messages == []
+
+    def test_rear_docks_position_on_dock_side(self):
+        unit, _, _ = _make_indx()
+        self._set(unit, [_park_position(310)], clearance_y=300.0, dock_dir=1)
+        unit._check_dock_clearance()
+        assert unit.afc.logger.messages == [("info", PARK_WARNING.format(y=310, c=300))]
+
+    def test_rear_docks_position_clear(self):
+        unit, _, _ = _make_indx()
+        self._set(unit, [_park_position(-10)], clearance_y=300.0, dock_dir=1)
+        unit._check_dock_clearance()
+        assert unit.afc.logger.messages == []
+
+    @pytest.mark.parametrize("position", [None, "100,-10", (100,), (-99, -99)])
+    def test_unusable_position_skips(self, position):
+        unit, _, _ = _make_indx()
+        self._set(unit, [("park", "_AFC_PARK_VARS", "park_loc_xy", position, (-99, -99))])
+        unit._check_dock_clearance()
+        assert unit.afc.logger.messages == []
+
+    def test_checks_every_position(self):
+        unit, _, _ = _make_indx()
+        self._set(unit, [("tool_cut", "_AFC_CUT_TIP_VARS", "pin_loc_xy", (1, -1), (-99, -99)),
+                         ("poop", "_AFC_POOP_VARS", "purge_loc_xy", [1, 3], (-99, -99)),
+                         ("kick", "_AFC_KICK_VARS", "kick_start_loc", (1, -4, 5),
+                          (-99, -99, 5))])
+        unit._check_dock_clearance()
+        assert unit.afc.logger.messages == [
+            ("info", f"Warning: {var} Y {y} in {macro} is on the dock side of INDX "
+                     "clearance_y 0, a tool on the head can hit the docked tools there.")
+            for var, macro, y in [("pin_loc_xy", "_AFC_CUT_TIP_VARS", -1),
+                                  ("kick_start_loc", "_AFC_KICK_VARS", -4)]]
+
+    def test_runs_from_handle_ready(self):
+        unit, _, _ = _make_indx(ready=False)
+        self._set(unit, [_park_position(-10)])
+        unit.handle_ready()
+        assert unit.afc.logger.messages == [("info", PARK_WARNING.format(y=-10, c=0))]
 
 
 # ── select ───────────────────────────────────────────────────────────────────
@@ -642,12 +756,12 @@ class TestAfcIndxCmdToolChanged:
 # ── cmd_AFC_INDX_PRE_LATCH ───────────────────────────────────────────────────
 
 class TestAfcIndxCmdPreLatch:
-    def test_unsyncs_only_indx_lanes(self):
+    def test_deactivates_only_indx_lanes(self):
         unit, _, tools = _make_indx(active=0)
         other = MagicMock()
         other.extruder_obj = MagicMock()
         unit.afc.lanes["other"] = other
         unit.cmd_AFC_INDX_PRE_LATCH(MockGCodeCommand())
         for tool in tools:
-            tool.tc_lane.unsync_to_extruder.assert_called_once_with()
-        other.unsync_to_extruder.assert_not_called()
+            tool.tc_lane.deactivate.assert_called_once_with()
+        other.deactivate.assert_not_called()

@@ -1,0 +1,29 @@
+# Bondtech INDX fed by a BoxTurtle, integration test
+#
+# Loads the mixed layout from afc_indx_lanes.cfg (N:1, 1:1 and standalone tools on one INDX)
+# and checks that lanes attach to the right tools and that latch moves free the lane motors.
+# Tool changes need homing and real hardware, those flows are covered by unit tests.
+
+DICTIONARY stm32h723.dict
+CONFIG afc_indx_lanes.cfg
+
+AFC_CLEAR_MESSAGE
+_INDX_SET_ACTIVE_TOOL TOOL=-1
+
+# Lanes attach to their INDX tool, the standalone lane only stays on tool2
+ASSERT TEST="{printer['AFC_extruder tool0'].lanes == ['lane1', 'lane2']}"
+ASSERT TEST="{printer['AFC_extruder tool1'].lanes == ['lane3']}"
+ASSERT TEST="{printer['AFC_extruder tool2'].lanes == ['tool2']}"
+ASSERT TEST="{not printer['AFC_extruder tool0'].is_standalone}"
+ASSERT TEST="{printer['AFC_extruder tool2'].is_standalone}"
+ASSERT TEST="{printer['AFC_extruder tool0'].buffer == 'buf_t0'}"
+ASSERT TEST="{printer['AFC_extruder tool1'].buffer == 'buf_t1'}"
+
+# INDX picks up tool1 outside AFC
+_INDX_SET_ACTIVE_TOOL TOOL=1
+ASSERT TEST="{printer['AFC_extruder tool1'].on_shuttle}"
+ASSERT TEST="{not printer['AFC_extruder tool0'].on_shuttle}"
+
+# Latch hook unsyncs and frees every lane
+AFC_INDX_PRE_LATCH
+_INDX_SET_ACTIVE_TOOL TOOL=-1

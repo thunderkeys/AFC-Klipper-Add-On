@@ -28,7 +28,7 @@ import threading
 from unittest.mock import MagicMock, call, patch
 import pytest
 
-from extras.AFC import afc, State, AFC_VERSION
+from extras.AFC import afc, State, AFC_VERSION, MACRO_POSITIONS
 from extras.AFC_lane import AFCLaneState, AFCMoveWarning
 from klippy import Printer
 
@@ -2839,6 +2839,20 @@ class TestGetDefaultMaterialTemps:
 
 # save_pos
 
+    # ── heater parameter ─────────────────────────────────────────────────────
+
+    def test_heater_param_used_for_min_extrude_temp(self):
+        obj = _make_afc_for_material_temps(default_material_temps=[], min_extrude_temp=170.0)
+        other = MagicMock()
+        other.min_extrude_temp = 250.0
+        lane = _make_lane_for_material_temps(extruder_temp=220)
+        assert obj._get_default_material_temps(lane, other) == (255.0, True)
+
+    def test_heater_param_default_uses_afc_heater(self):
+        obj = _make_afc_for_material_temps(default_material_temps=[], min_extrude_temp=170.0)
+        lane = _make_lane_for_material_temps(extruder_temp=220)
+        assert obj._get_default_material_temps(lane) == (220.0, False)
+
 def _make_afc_for_save_pos():
     """Build an afc instance wired up for save_pos tests."""
     obj = _make_afc()
@@ -3906,6 +3920,90 @@ class TestToolLoadNeedPurge:
         assert any("Exception: Error Occurred" in m for m in debug_msgs)
 
 
+# ── macro_positions / verify_macro_positions ─────────────────────────────────
+
+def _make_afc_for_positions(**positions):
+    """afc with every position feature disabled and AFC vars macros holding `positions`, a map
+    of vars macro name to {variable: value}."""
+    obj = _make_afc()
+    for feature, cmd_attr, afc_cmd, _, _, _ in MACRO_POSITIONS:
+        setattr(obj, feature, False)
+        setattr(obj, cmd_attr, afc_cmd)
+    for macro_name, values in positions.items():
+        macro = MagicMock()
+        macro.variables = values
+        obj.printer._objects[f"gcode_macro {macro_name}"] = macro
+    return obj
+
+
+ALL_POSITIONS = {"_AFC_CUT_TIP_VARS": {"pin_loc_xy": (1, 2)},
+                 "_AFC_PARK_VARS": {"park_loc_xy": (3, 4)},
+                 "_AFC_POOP_VARS": {"purge_loc_xy": (5, 6)},
+                 "_AFC_KICK_VARS": {"kick_start_loc": (7, 8, 5)},
+                 "_AFC_BRUSH_VARS": {"brush_loc": (9, 10, -1)}}
+
+
+class TestMacroPositions:
+    def test_all_enabled(self):
+        obj = _make_afc_for_positions(**ALL_POSITIONS)
+        for feature in ("tool_cut", "park", "poop", "kick", "wipe"):
+            setattr(obj, feature, True)
+        assert obj.macro_positions() == [
+            ("tool_cut", "_AFC_CUT_TIP_VARS", "pin_loc_xy", (1, 2), (-99, -99)),
+            ("park", "_AFC_PARK_VARS", "park_loc_xy", (3, 4), (-99, -99)),
+            ("poop", "_AFC_POOP_VARS", "purge_loc_xy", (5, 6), (-99, -99)),
+            ("kick", "_AFC_KICK_VARS", "kick_start_loc", (7, 8, 5), (-99, -99, 5)),
+            ("wipe", "_AFC_BRUSH_VARS", "brush_loc", (9, 10, -1), (-99, -99, -1))]
+
+    def test_disabled_feature_left_out(self):
+        obj = _make_afc_for_positions(**ALL_POSITIONS)
+        assert obj.macro_positions() == []
+
+    def test_custom_command_left_out(self):
+        obj = _make_afc_for_positions(**ALL_POSITIONS)
+        obj.park = True
+        obj.park_cmd = "MY_PARK"
+        assert obj.macro_positions() == []
+
+    def test_missing_macro_left_out(self):
+        obj = _make_afc_for_positions()
+        obj.park = True
+        assert obj.macro_positions() == []
+
+    def test_missing_variable_is_none(self):
+        obj = _make_afc_for_positions(_AFC_PARK_VARS={})
+        obj.park = True
+        assert obj.macro_positions() == [("park", "_AFC_PARK_VARS", "park_loc_xy", None,
+                                          (-99, -99))]
+
+
+class TestVerifyMacroPositions:
+    def test_all_set(self):
+        obj = _make_afc()
+        obj.macro_positions = MagicMock(return_value=[
+            ("park", "_AFC_PARK_VARS", "park_loc_xy", (3, 4), (-99, -99))])
+        assert obj.verify_macro_positions() == ""
+
+    @pytest.mark.parametrize("position", [None, ()])
+    def test_empty_position_not_reported(self, position):
+        obj = _make_afc()
+        obj.macro_positions = MagicMock(return_value=[
+            ("park", "_AFC_PARK_VARS", "park_loc_xy", position, (-99, -99))])
+        assert obj.verify_macro_positions() == ""
+
+    def test_placeholders_reported(self):
+        obj = _make_afc()
+        obj.macro_positions = MagicMock(return_value=[
+            ("tool_cut", "_AFC_CUT_TIP_VARS", "pin_loc_xy", (-99, -99), (-99, -99)),
+            ("park", "_AFC_PARK_VARS", "park_loc_xy", (3, 4), (-99, -99)),
+            ("kick", "_AFC_KICK_VARS", "kick_start_loc", (-99, -99, 5), (-99, -99, 5))])
+        assert obj.verify_macro_positions() == (
+            "tool_cut is set to True and variable_pin_loc_xy has not been updated.\n"
+            "Please update variable_pin_loc_xy in AFC\\AFC_Macro_Vars.cfg file.\n\n"
+            "kick is set to True and variable_kick_start_loc has not been updated.\n"
+            "Please update variable_kick_start_loc in AFC\\AFC_Macro_Vars.cfg file.\n\n")
+
+
 # ── do_tool_cut_tip_form ────────────────────────────────────────────────────────
 # Extracted out of unload_sequence; behavior/log-message content is unchanged so
 # these tests exercise it directly through its new standalone entry point.
@@ -3921,6 +4019,8 @@ class TestDoToolCutTipForm:
         afc.form_tip_cmd = None
         lane = _make_afc_lane()
         lane.extruder_obj.name = "e0"
+        lane.extruder_obj.tool_cut = None
+        lane.extruder_obj.form_tip = None
         return afc, lane
 
     def test_tool_cut_true_park_true_cuts_and_parks(self):
@@ -3957,6 +4057,48 @@ class TestDoToolCutTipForm:
         assert afc.gcode.run_script_from_command.call_args_list == [call("AFC_CUT EXTRUDER=e0")]
         assert afc.afcDeltaTime.log_with_time.call_args_list == [call("TOOL_UNLOAD: After cut")]
         assert afc.function.log_toolhead_pos.call_count == 1
+
+    def test_tool_override_enables_cut(self):
+        afc, lane = self._make()
+        afc.tool_cut = False
+        afc.tool_cut_cmd = "AFC_CUT"
+        lane.extruder_obj.tool_cut = True
+
+        afc.do_tool_cut_tip_form(lane, lane.extruder_obj)
+
+        lane.extruder_obj.estats.increase_cut_total.assert_called_once_with()
+        assert afc.gcode.run_script_from_command.call_args_list == [call("AFC_CUT EXTRUDER=e0")]
+
+    def test_tool_override_disables_cut(self):
+        afc, lane = self._make()
+        afc.tool_cut = True
+        afc.tool_cut_cmd = "AFC_CUT"
+        lane.extruder_obj.tool_cut = False
+
+        afc.do_tool_cut_tip_form(lane, lane.extruder_obj)
+
+        lane.extruder_obj.estats.increase_cut_total.assert_not_called()
+        afc.gcode.run_script_from_command.assert_not_called()
+
+    def test_tool_override_enables_form_tip(self):
+        afc, lane = self._make()
+        afc.form_tip = False
+        afc.form_tip_cmd = "MY_TIP"
+        lane.extruder_obj.form_tip = True
+
+        afc.do_tool_cut_tip_form(lane, lane.extruder_obj)
+
+        assert afc.gcode.run_script_from_command.call_args_list == [call("MY_TIP")]
+
+    def test_tool_override_disables_form_tip(self):
+        afc, lane = self._make()
+        afc.form_tip = True
+        afc.form_tip_cmd = "MY_TIP"
+        lane.extruder_obj.form_tip = False
+
+        afc.do_tool_cut_tip_form(lane, lane.extruder_obj)
+
+        afc.gcode.run_script_from_command.assert_not_called()
 
     def test_tool_cut_false_skips_cut_entirely(self):
         afc, lane = self._make()
@@ -4131,6 +4273,8 @@ class TestUnloadSequenceUnitUnloadLane:
         lane.unit_obj = MagicMock(spec=["lane_unloading", "unit_unload_lane"])
         hub = MagicMock()
         extruder = MagicMock()
+        extruder.tool_cut = None
+        extruder.form_tip = None
         return afc, lane, hub, extruder
 
     def test_unit_unload_lane_failure_returns_false(self):

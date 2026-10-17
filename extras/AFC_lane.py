@@ -1461,6 +1461,15 @@ class AFCLane:
     def sync_print_time(self):
         return
 
+    def deactivate(self) -> None:
+        """
+        Releases the lane from the extruder: unsyncs it and turns off its stepper and buffer, so
+        the filament is free to move. Used for lanes not in the tool on the head.
+        """
+        self.unsync_to_extruder()
+        self.do_enable(False)
+        self.disable_buffer()
+
     def sync_to_extruder(self, update_current: bool=True) -> None:
         """
         Helper function to sync lane to extruder and set print current if specified.

@@ -28,6 +28,7 @@ DEFAULT_CHANGE_MACRO = "INDX_CHANGE_TOOL"
 DEFAULT_PARK_MACRO = "PARK_TOOL"
 
 
+
 class AfcIndx(AfcToolchanger):
     """
     Toolchanger unit that drives the vendored INDX macros.
@@ -56,14 +57,6 @@ class AfcIndx(AfcToolchanger):
                                         desc=self.cmd_AFC_INDX_TOOL_CHANGED_help)
         self.afc.gcode.register_command("AFC_INDX_PRE_LATCH", self.cmd_AFC_INDX_PRE_LATCH,
                                         desc=self.cmd_AFC_INDX_PRE_LATCH_help)
-
-    def tools(self) -> list[AFCExtruder]:
-        """
-        Tools that belong to this INDX unit.
-
-        :return list: AFC_extruder objects attached to this unit
-        """
-        return [tool for tool in self.afc.tools.values() if tool.tc_unit_obj is self]
 
     def handle_ready(self) -> None:
         """
@@ -110,7 +103,43 @@ class AfcIndx(AfcToolchanger):
                          f"found: {', '.join(sorted(extruder_names))}")
             raise error(error_str)
 
+        self._check_lanes()
+        self._check_dock_clearance()
         self.update_tool_macros()
+
+    def _check_lanes(self) -> None:
+        """
+        Validates lanes that feed INDX tools, a tool in no_heat_tools can't take filament. Hubs
+        are checked by the base toolchanger.
+        """
+        no_heat = self.no_heat_indexes()
+        for lane in self.tool_lanes():
+            tool = lane.extruder_obj
+            if tool.tool_index in no_heat:
+                error_str = (f"[{lane.fullname}] feeds {tool.name}, but T{tool.tool_index} is in "
+                             "INDX no_heat_tools and can't take filament.")
+                raise error(error_str)
+
+    def _check_dock_clearance(self) -> None:
+        """
+        Warns about enabled AFC macro positions that lie on the dock side of INDX clearance_y,
+        where a tool on the head can hit the docked tools.
+        """
+        variables = self.positions_macro.variables
+        if "clearance_y" not in variables:
+            return
+        clearance_y = float(variables["clearance_y"])
+        dock_dir = float(variables.get("dock_dir", -1))
+        for _, macro_name, var_name, position, unset in self.afc.macro_positions():
+            if (not isinstance(position, (list, tuple))
+                or len(position) < 2
+                or position == unset):
+                continue
+            y = float(position[1])
+            if (y - clearance_y) * dock_dir > 0:
+                self.logger.info(f"Warning: {var_name} Y {y:g} in {macro_name} is on the dock "
+                                 f"side of INDX clearance_y {clearance_y:g}, a tool on the head "
+                                 "can hit the docked tools there.")
 
     def active_index(self) -> int:
         """
@@ -304,8 +333,9 @@ class AfcIndx(AfcToolchanger):
     def cmd_AFC_INDX_PRE_LATCH(self, gcmd: GCodeCommand) -> None:
         """
         Called by the vendored `_TC_LATCH_MOVE` macro before every latch move. Latch moves drive
-        the shared extruder, so every lane stepper on an INDX tool is unsynced first to keep it
-        from moving filament with the latch. Lanes are synced again once a tool change finishes.
+        the shared extruder, which can grip the filament, so every lane stepper on an INDX tool
+        is deactivated (unsynced, motor and buffer off), leaving the filament free to move. The
+        lane in the tool on the head is activated again once the change finishes.
 
         Usage
         -----
@@ -320,4 +350,4 @@ class AfcIndx(AfcToolchanger):
         tools = self.tools()
         for lane in self.afc.lanes.values():
             if lane.extruder_obj in tools:
-                lane.unsync_to_extruder()
+                lane.deactivate()

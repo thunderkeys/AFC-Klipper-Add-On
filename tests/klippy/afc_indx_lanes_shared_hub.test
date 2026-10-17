@@ -1,0 +1,7 @@
+# Invalid INDX layout where one hub feeds two INDX tools. AFC must raise a config error so
+# klipper stops loading.
+
+DICTIONARY stm32h723.dict
+CONFIG afc_indx_lanes_shared_hub.cfg
+
+SHOULD_FAIL

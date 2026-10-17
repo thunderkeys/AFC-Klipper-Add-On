@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from configparser import Error as KlipperError
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 import pytest
 
 from extras import AFC
@@ -87,6 +87,21 @@ class TestAFCExtruderInitToolIndex:
         printer, _ = _make_printer()
         assert _make_tool(printer, "tool3", {"extruder_name": "extruder",
                                               "tool_index": 3}).tool_index == 3
+
+
+class TestAFCExtruderInitToolCutFormTip:
+    def test_default_none(self):
+        printer, _ = _make_printer()
+        tool = _make_tool(printer, "extruder")
+        assert tool.tool_cut is None
+        assert tool.form_tip is None
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_read_from_config(self, value):
+        printer, _ = _make_printer()
+        tool = _make_tool(printer, "extruder", {"tool_cut": value, "form_tip": not value})
+        assert tool.tool_cut is value
+        assert tool.form_tip is (not value)
 
 
 class TestAFCExtruderSharedExtruder:
@@ -505,6 +520,26 @@ class TestAfcChangeTool:
         assert lane.status == AFCLaneState.LOADED
         assert afc.logger.messages == [("info", "Tool Change - lane1 -> lane2")]
 
+    def test_infinite_runout_to_other_tool_clears_tool_on_head_first(self):
+        """The runout lane is force unloaded and ejected while its tool is still on the head,
+        before the new lane is loaded (which picks up the other tool)."""
+        afc = _change_tool_afc()
+        runout = afc.lanes["lane1"]
+        runout.extruder_obj.is_standalone.return_value = False
+        runout.is_direct_hub.return_value = False
+        lane = afc.lanes["lane2"]
+        lane.status = AFCLaneState.INFINITE_RUNOUT
+        order = MagicMock()
+        order.attach_mock(afc.TOOL_UNLOAD, "TOOL_UNLOAD")
+        order.attach_mock(afc.LANE_UNLOAD, "LANE_UNLOAD")
+        order.attach_mock(afc.TOOL_LOAD, "TOOL_LOAD")
+        afc.CHANGE_TOOL(lane)
+        assert order.mock_calls[:3] == [
+            call.TOOL_UNLOAD(runout, set_start_time=False, force_unload=True),
+            call.LANE_UNLOAD(runout),
+            call.TOOL_LOAD(lane, None, set_start_time=False)]
+        assert afc.logger.messages == [("info", "Tool Change - lane1 -> lane2")]
+
     def test_regular_toolchanger_still_preheats(self):
         afc = _change_tool_afc(heats_on_pickup=False)
         afc.CHANGE_TOOL(afc.lanes["lane2"], new_extruder_temp=230.0)
@@ -672,6 +707,24 @@ class TestAfcToolUnload:
         assert afc.logger.messages == [
             ("debug", f"Current extruder: {new_tool}, current lane:None"),
             ("debug", "Next lane load:lane2, lanes:{}, current lane:None, unload_toolhead:False")]
+
+    def test_force_unload_stays_on_current_tool(self):
+        """Infinite runout force unload clears the tool on the head without a swap."""
+        afc, lane = _load_afc()
+        afc.next_lane_load = "lane2"
+        afc.function.get_current_lane.return_value = "lane1"
+        current = MagicMock()
+        current.name = "lane1"
+        current.hub = "hub_t0"
+        afc.unload_sequence = MagicMock(return_value=True)
+        afc.save_vars = MagicMock()
+        afc.capture_toolhead_temp = MagicMock(return_value=None)
+        afc.restore_toolhead_temp = MagicMock()
+        assert afc.TOOL_UNLOAD(current, force_unload=True) is True
+        lane.tool_swap.assert_not_called()
+        afc.unload_sequence.assert_called_once_with(current, current.hub_obj,
+                                                    current.extruder_obj)
+        assert afc.logger.messages == [("info", "Unloading lane1")]
 
     def test_no_swap_without_next_tool(self):
         """next_extruder None alone skips the swap."""

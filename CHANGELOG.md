@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10-16-2026]
+### Added
+- AFC lanes can feed Bondtech INDX tools: one lane per tool (`hub: direct`), several lanes per
+  tool through a hub, or a mix with standalone tools on one printer. AFC checks at startup that
+  no lane feeds a tool in `no_heat_tools`, and warns about AFC park, poop, kick, brush and cut
+  positions on the dock side of INDX `clearance_y`.
+- `[AFC_extruder]` takes `tool_cut` and `form_tip` to override the `AFC.cfg` values per tool.
+### Changed
+- Toolchangers (KTC, U1 and INDX) refuse to start when one `[AFC_hub]` feeds lanes on more than
+  one tool. A hub merges its lanes into a single path, so it can only feed one tool.
+- INDX latch moves now also disable the lane motors and buffers of INDX tools, not only unsync
+  them, since the DX may grip the filament during the latch.
+- Toolchangers that heat on pickup (INDX) pick up a tool holding a different lane than the one
+  requested at the loaded lane's temperature, so that lane can be unloaded before the new one
+  loads.
+- `verify_macro_positions` reads the cut, park, poop, kick and brush positions from one shared
+  table (`MACRO_POSITIONS`), also used by the INDX dock clearance check.
+
 ## [10-14-2026]
 ### Added
 - Bondtech INDX toolchanger support. `[AFC_Toolchanger]` takes a new `backend` option (`ktc` default,

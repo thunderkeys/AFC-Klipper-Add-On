@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from extras.AFC_error import afcError
     from extras.AFC_stepper import AFCExtruderStepper
     from extras.AFC_unit import afcUnit
+    from extras.heaters import Heater
 
 ERROR_STR = "Error trying to import {import_lib}, please rerun install-afc.sh script in your AFC-Klipper-Add-On directory then restart klipper\n\n{trace}"
 
@@ -58,6 +59,17 @@ try: from extras.AFC_stats import AFCStats
 except: raise error(ERROR_STR.format(import_lib="AFC_stats", trace=traceback.format_exc()))
 
 AFC_VERSION="1.2.7"
+
+# Positions set in AFC_Macro_Vars.cfg: (feature flag, command attribute, AFC macro the position is
+# for, vars macro, position variable, placeholder value left until the user sets it).
+MACRO_POSITIONS = [("tool_cut", "tool_cut_cmd", "AFC_CUT", "_AFC_CUT_TIP_VARS", "pin_loc_xy",
+                    (-99, -99)),
+                   ("park", "park_cmd", "AFC_PARK", "_AFC_PARK_VARS", "park_loc_xy", (-99, -99)),
+                   ("poop", "poop_cmd", "AFC_POOP", "_AFC_POOP_VARS", "purge_loc_xy", (-99, -99)),
+                   ("kick", "kick_cmd", "AFC_KICK", "_AFC_KICK_VARS", "kick_start_loc",
+                    (-99, -99, 5)),
+                   ("wipe", "wipe_cmd", "AFC_BRUSH", "_AFC_BRUSH_VARS", "brush_loc",
+                    (-99, -99, -1))]
 
 # Class for holding different states so its clear what all valid states are
 class State(str, Enum):
@@ -565,6 +577,27 @@ class afc:
 
         self.logger.info(string, console_only)
 
+    def macro_positions(self) -> List[Tuple[str, str, str, Any, Tuple[int, ...]]]:
+        """
+        Positions from AFC_Macro_Vars.cfg used by enabled cut, park, poop, kick and wipe
+        features. Features running a custom macro are left out since they do not use these
+        positions.
+
+        :return list: (feature, vars macro, position variable, position, placeholder) per enabled
+            feature whose vars macro is loaded
+        """
+        positions = []
+        for feature, cmd_attr, afc_cmd, macro_name, var_name, unset in MACRO_POSITIONS:
+            if (not getattr(self, feature)
+                or getattr(self, cmd_attr) != afc_cmd):
+                continue
+            macro = self.printer.lookup_object(f"gcode_macro {macro_name}", None)
+            if macro is None:
+                continue
+            positions.append((feature, macro_name, var_name, macro.variables.get(var_name, None),
+                              unset))
+        return positions
+
     def verify_macro_positions(self) -> str:
         """
         Verifies that cut, park, poop, kick, wipe positions are set correctly if these
@@ -574,51 +607,13 @@ class afc:
                      text informing the user they need to update their positions
         """
         error_str = ""
-        tool_cut_obj = self.printer.lookup_object('gcode_macro _AFC_CUT_TIP_VARS', None)
-        if (self.tool_cut
-            and self.tool_cut_cmd == "AFC_CUT"
-            and tool_cut_obj):
-            pin_loc_xy = tool_cut_obj.variables.get('pin_loc_xy', None)
-            if pin_loc_xy and pin_loc_xy == (-99,-99):
-                error_str += 'tool_cut is set to True and variable_pin_loc_xy has not been updated.\n'
-                error_str += 'Please update variable_pin_loc_xy in AFC\\AFC_Macro_Vars.cfg file.\n\n'
-
-        park_obj = self.printer.lookup_object('gcode_macro _AFC_PARK_VARS', None)
-        if (self.park
-            and self.park_cmd == "AFC_PARK"
-            and park_obj):
-            park_loc_xy = park_obj.variables.get('park_loc_xy', None)
-            if park_loc_xy and park_loc_xy == (-99,-99):
-                error_str += 'park is set to True and variable_park_loc_xy has not been updated.\n'
-                error_str += 'Please update variable_park_loc_xy in AFC\\AFC_Macro_Vars.cfg file.\n\n'
-
-        poop_obj = self.printer.lookup_object('gcode_macro _AFC_POOP_VARS', None)
-        if (self.poop
-            and self.poop_cmd == "AFC_POOP"
-            and poop_obj):
-            purge_loc_xy = poop_obj.variables.get('purge_loc_xy', None)
-            if purge_loc_xy and purge_loc_xy == (-99,-99):
-                error_str += 'poop is set to True and variable_purge_loc_xy has not been updated.\n'
-                error_str += 'Please update variable_purge_loc_xy in AFC\\AFC_Macro_Vars.cfg file.\n\n'
-
-        kick_obj = self.printer.lookup_object('gcode_macro _AFC_KICK_VARS', None)
-        if (self.kick
-            and self.kick_cmd == "AFC_KICK"
-            and kick_obj):
-            kick_start_loc = kick_obj.variables.get('kick_start_loc', None)
-            if kick_start_loc and kick_start_loc == (-99,-99,5):
-                error_str += 'kick is set to True and variable_kick_start_loc has not been updated.\n'
-                error_str += 'Please update variable_kick_start_loc in AFC\\AFC_Macro_Vars.cfg file.\n\n'
-
-        wipe_obj = self.printer.lookup_object('gcode_macro _AFC_BRUSH_VARS', None)
-        if (self.wipe
-            and self.wipe_cmd == "AFC_BRUSH"
-            and wipe_obj):
-            brush_loc = wipe_obj.variables.get('brush_loc', None)
-            if brush_loc and brush_loc == (-99,-99,-1):
-                error_str += 'wipe is set to True and variable_brush_loc has not been updated.\n'
-                error_str += 'Please update variable_brush_loc in AFC\\AFC_Macro_Vars.cfg file.\n\n'
-
+        for feature, _, var_name, position, unset in self.macro_positions():
+            if (position
+                and position == unset):
+                error_str += (f"{feature} is set to True and variable_{var_name} has not been "
+                              "updated.\n")
+                error_str += (f"Please update variable_{var_name} in AFC\\AFC_Macro_Vars.cfg "
+                              "file.\n\n")
         return error_str
 
     @property
@@ -703,7 +698,8 @@ class afc:
             if current_lane.buffer_obj is not None:
                 current_lane.buffer_obj.update_filament_error_pos()
 
-    def _get_default_material_temps(self, cur_lane):
+    def _get_default_material_temps(self, cur_lane: AFCLane,
+                                    heater: Optional[Heater]=None) -> Tuple[float, bool]:
         """
         Helper function to get material temperatures
 
@@ -713,21 +709,25 @@ class afc:
         in AFC.cfg and sees if a temperature exists for filament material.
 
         :param cur_lane: Current lane object
+        :param heater: Heater whose min_extrude_temp is used, defaults to the last checked heater
         :return tuple : float for temperature to heat extruder to,
                          bool True if user is using min_extruder_temp value
         """
+        if heater is None:
+            heater = self.heater
+        temp_value: Union[str, float]
         try:
             # Try to get default value from list, if it does not exist then default to min_extrude_temp + 5
             temp_value = [val for val in self.default_material_temps if 'default' in val][0].split(":")[1]
         except:
-            temp_value = self.heater.min_extrude_temp + 5
+            temp_value = heater.min_extrude_temp + 5
 
         # True when using a fallback/default/min-derived temp instead of an explicit lane or
         # material-specific temp
         using_min_value = True
         if (cur_lane.extruder_temp is not None
             and cur_lane.extruder_temp > 0  # Keep 0 unset if min_extrude_temp is configured below zero.
-            and cur_lane.extruder_temp > self.heater.min_extrude_temp):
+            and cur_lane.extruder_temp > heater.min_extrude_temp):
             temp_value = cur_lane.extruder_temp
             using_min_value = False
         elif self.default_material_temps is not None and cur_lane.material is not None:
@@ -770,7 +770,7 @@ class afc:
         if (self.function.is_printing()
             and self.print_tool_temperatures):
             using_min_value = False
-            target_temp = None
+            target_temp: Optional[float] = None
             try:
                 # cur_lane.current_map is expected to be the tool number as "T<n>" (e.g. "T3"),
                 # used here as the index into print_tool_temperatures from the sliced
@@ -2175,12 +2175,20 @@ class afc:
     def do_tool_cut_tip_form(self, cur_lane: AFCLane, cur_extruder: AFCExtruder) -> None:
         """
         Performs filament cutting/parking and tip forming during unload, if enabled in config.
+        The tool's own tool_cut/form_tip settings override the AFC.cfg values.
 
         :param cur_lane: The lane object being unloaded.
         :param cur_extruder: The extruder object associated with the lane.
         """
+        tool_cut = self.tool_cut
+        if cur_extruder.tool_cut is not None:
+            tool_cut = cur_extruder.tool_cut
+        form_tip = self.form_tip
+        if cur_extruder.form_tip is not None:
+            form_tip = cur_extruder.form_tip
+
         # Perform filament cutting and parking if specified.
-        if self.tool_cut:
+        if tool_cut:
             cur_lane.extruder_obj.estats.increase_cut_total()
             self.gcode.run_script_from_command(
                 "{} EXTRUDER={}".format(self.tool_cut_cmd, cur_extruder.name)
@@ -2196,7 +2204,7 @@ class afc:
                 self.function.log_toolhead_pos()
 
         # Form filament tip if necessary.
-        if self.form_tip:
+        if form_tip:
             if self.park:
                 self.gcode.run_script_from_command(
                     "{} EXTRUDER={}".format(self.park_cmd, cur_extruder.name)
