@@ -1068,6 +1068,7 @@ class TestCalibrateAFC:
         afc.function.get_current_lane = MagicMock(return_value=None)
         lane.extruder_obj.is_standalone = MagicMock(return_value=standalone)
         lane.extruder_obj.name = "extruder"
+        lane.extruder_obj.shared_extruder = False
 
         afc.lanes[lane.name] = lane
 
@@ -1643,6 +1644,151 @@ class TestCalibrateAFC:
         self._assert_afc_cali_comp_called(
             func, [f"'TD1_Bowden_length: {lane.name}'"], [], title="TD-1 Calibration"
         )
+
+    def _setup_shared_extruder_bowden(self, swapped):
+        """Bowden calibration of a lane whose INDX style tool is docked."""
+        func, afc, lane = self._setup_calibration()
+        lane.extruder_obj.tool_start = MagicMock(return_value="buffer")
+        lane.extruder_obj.shared_extruder = True
+        lane.extruder_obj.tool_key = "tool0"
+        lane.extruder_obj.name = "tool0"
+        lane.tool_swap = MagicMock(return_value=swapped)
+        func.get_current_extruder = MagicMock(return_value="tool1")
+        func.check_homed = MagicMock(return_value=True)
+        gcmd = self._make_gcmd_for_calibration(bowden=lane.name)
+        self._set_calibrate_bowden_result(lane, (True, "afc_bowden_length successful", 1000))
+        return func, lane, gcmd
+
+    def test_calibration_bowden_shared_extruder_picks_up_tool(self):
+        func, lane, gcmd = self._setup_shared_extruder_bowden(swapped=True)
+
+        self._call_cmd_calibrate_afc(func, gcmd)
+
+        lane.tool_swap.assert_called_once_with()
+        self._assert_calibrate_bowden_called(lane)
+        self._assert_afc_cali_comp_called(func, [f"Bowden_length: {lane.name}"], [])
+        self._assert_info_contains(func, f"Picking up tool0 to calibrate {lane.name}")
+
+    def test_calibration_bowden_shared_extruder_pickup_fails(self):
+        func, lane, gcmd = self._setup_shared_extruder_bowden(swapped=False)
+
+        self._call_cmd_calibrate_afc(func, gcmd)
+
+        lane.tool_swap.assert_called_once_with()
+        self._assert_calibrate_bowden_not_called(lane)
+        self._assert_afc_error(func, f"Failed to pick up tool0 before calibrating {lane.name}")
+        func._afc_cali_comp.assert_not_called()
+        self._assert_info_not_contains(func, "Starting AFC distance Calibrations")
+
+
+# ── _lane_calibration ────────────────────────────────────────────────────────
+
+class TestLaneCalibration:
+    def _setup(self, direct, pickup=True):
+        func = _make_func()
+        afc = _make_afc()
+        afc.error = MagicMock()
+        lane = _make_afc_lane()
+        lane.extruder_obj.is_standalone = MagicMock(return_value=False)
+        lane.hub_obj = None
+        lane._load_state = True
+        lane.prep_state = True
+        lane.is_direct_hub = MagicMock(return_value=direct)
+        lane.unit_obj.calibrate_bowden = MagicMock(return_value=(True, "ok", 1000))
+        lane.unit_obj.calibrate_lane = MagicMock(return_value=(True, "ok", 100))
+        afc.lanes[lane.name] = lane
+        func.afc = afc
+        func._calibration_pickup = MagicMock(return_value=pickup)
+        return func, lane
+
+    def test_direct_lane_picks_up_tool_before_calibrating(self):
+        func, lane = self._setup(direct=True)
+
+        result = func._lane_calibration(lane.name, None, 5, 25)
+
+        assert result == (True, [lane.name], [])
+        func._calibration_pickup.assert_called_once_with(lane)
+        lane.unit_obj.calibrate_bowden.assert_called_once_with(lane, 25, 5)
+
+    def test_direct_lane_pickup_fails(self):
+        func, lane = self._setup(direct=True, pickup=False)
+
+        result = func._lane_calibration(lane.name, None, 5, 25)
+
+        assert result == (False, [], [])
+        lane.unit_obj.calibrate_bowden.assert_not_called()
+        assert func.logger.messages == [("info", "Starting AFC distance Calibrations")]
+
+    def test_hub_lane_does_not_pick_up_tool(self):
+        func, lane = self._setup(direct=False)
+
+        result = func._lane_calibration(lane.name, None, 5, 25)
+
+        assert result == (True, [lane.name], [])
+        func._calibration_pickup.assert_not_called()
+        lane.unit_obj.calibrate_lane.assert_called_once_with(lane, 5)
+
+
+# ── _calibration_pickup ──────────────────────────────────────────────────────
+
+class TestCalibrationPickup:
+    def _setup(self, shared=True, current="tool1", homed=True, swapped=True):
+        func = _make_func()
+        func.afc.error = MagicMock()
+        func.get_current_extruder = MagicMock(return_value=current)
+        func.check_homed = MagicMock(return_value=homed)
+        lane = MagicMock()
+        lane.name = "lane1"
+        lane.extruder_obj.name = "tool0"
+        lane.extruder_obj.tool_key = "tool0"
+        lane.extruder_obj.shared_extruder = shared
+        lane.tool_swap = MagicMock(return_value=swapped)
+        return func, lane
+
+    def test_not_shared_extruder(self):
+        func, lane = self._setup(shared=False)
+
+        assert func._calibration_pickup(lane) is True
+
+        func.check_homed.assert_not_called()
+        lane.tool_swap.assert_not_called()
+        assert func.logger.messages == []
+
+    def test_tool_already_on_head(self):
+        func, lane = self._setup(current="tool0")
+
+        assert func._calibration_pickup(lane) is True
+
+        func.check_homed.assert_not_called()
+        lane.tool_swap.assert_not_called()
+
+    def test_not_homed(self):
+        func, lane = self._setup(homed=False)
+
+        assert func._calibration_pickup(lane) is False
+
+        func.check_homed.assert_called_once_with(
+            "Printer needs to be homed before picking up tool0 to calibrate")
+        lane.tool_swap.assert_not_called()
+        assert func.logger.messages == []
+
+    def test_pickup_fails(self):
+        func, lane = self._setup(swapped=False)
+
+        assert func._calibration_pickup(lane) is False
+
+        func.afc.error.AFC_error.assert_called_once_with(
+            "Failed to pick up tool0 before calibrating lane1", pause=False)
+        assert func.logger.messages == [("info", "Picking up tool0 to calibrate lane1")]
+
+    def test_picks_up_tool(self):
+        func, lane = self._setup()
+
+        assert func._calibration_pickup(lane) is True
+
+        lane.tool_swap.assert_called_once_with()
+        func.afc.error.AFC_error.assert_not_called()
+        assert func.logger.messages == [("info", "Picking up tool0 to calibrate lane1")]
 
 
 # ── cmd_AFC_LANE_RESET: stepperless unit delegation ─────────────────────────

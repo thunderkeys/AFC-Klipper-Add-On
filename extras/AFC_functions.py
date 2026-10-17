@@ -1058,6 +1058,8 @@ class afcFunction:
                 continue
             # Calibrate the specific lane, call calibrate_bowden if lane is direct hub
             if lane.is_direct_hub():
+                if not self._calibration_pickup(lane):
+                    return False, [], []
                 checked, msg, pos = lane.unit_obj.calibrate_bowden(lane, dis, tol)
             else:
                 checked, msg, pos = lane.unit_obj.calibrate_lane(lane, tol)
@@ -1090,6 +1092,31 @@ class afcFunction:
         self.logger.info("Lane calibration Done!")
         return checked, calibrated, additional_msg
 
+
+    def _calibration_pickup(self, cur_lane: AFCLane) -> bool:
+        """
+        Picks up the tool a lane feeds before a calibration pushes filament to it. Only done for
+        toolchangers whose tools share the head's extruder (e.g. INDX): a docked tool has nothing
+        to stop the filament, so it can only be fed while it is on the head.
+
+        :param cur_lane: Lane that is about to be calibrated to its tool
+        :return bool: False if the printer could not be homed or the pickup failed
+        """
+        extruder_obj = cur_lane.extruder_obj
+        if (not extruder_obj.shared_extruder
+            or self.get_current_extruder() == extruder_obj.tool_key):
+            return True
+
+        error_msg = f"Printer needs to be homed before picking up {extruder_obj.name} to calibrate"
+        if not self.check_homed(error_msg):
+            return False
+
+        self.logger.info(f"Picking up {extruder_obj.name} to calibrate {cur_lane.name}")
+        if not cur_lane.tool_swap():
+            error_msg = f"Failed to pick up {extruder_obj.name} before calibrating {cur_lane.name}"
+            self.afc.error.AFC_error(error_msg, pause=False)
+            return False
+        return True
 
     def _afc_cali_comp(self, cali: str, title: str,
                        additional_msg: str, gcmd: Optional[GCodeCommand]=None):
@@ -1574,6 +1601,10 @@ class afcFunction:
                             return
                         if self.afc.park_pre_load_cmd:
                             self.afc.gcode.run_script_from_command(f"{self.afc.park_pre_load_cmd}")
+
+                    if not self._calibration_pickup(cur_lane):
+                        checked = False
+                        return
 
                     self.logger.info('Starting AFC distance Calibrations')
 
